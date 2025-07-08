@@ -74,8 +74,7 @@ class DynamoDBHistoryManager:
                         ],
                         'Projection': {
                             'ProjectionType': 'ALL'
-                        },
-                        'BillingMode': 'PAY_PER_REQUEST'
+                        }
                     }
                 ],
                 BillingMode='PAY_PER_REQUEST'

@@ -48,8 +48,8 @@ async def lifespan(app: FastAPI):
     
     # Strands Agent 클라이언트 초기화
     model_provider = os.getenv("STRANDS_MODEL_PROVIDER", "bedrock")
-    model_id = os.getenv("STRANDS_MODEL_ID", "anthropic.claude-3-7-sonnet-20241022-v1:0")
-    region = os.getenv("STRANDS_REGION", "us-west-2")
+    model_id = os.getenv("STRANDS_MODEL_ID", "anthropic.claude-3-7-sonnet-20250219-v1:0")
+    region = os.getenv("STRANDS_REGION", "ap-northeast-2")
     development_mode = os.getenv("DEVELOPMENT_MODE", "true").lower() == "true"
     
     strands_client = StrandsAgentClient(
@@ -119,6 +119,7 @@ def get_history_manager() -> Optional[DynamoDBHistoryManager]:
     return history_manager
 
 from fastapi.responses import RedirectResponse
+import json
 
 @app.get("/")
 async def root():
