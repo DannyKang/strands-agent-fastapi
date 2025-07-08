@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -98,6 +99,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 정적 파일 서빙
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 def get_session_manager() -> SessionManager:
     """세션 매니저 의존성"""
     if session_manager is None:
@@ -114,9 +118,16 @@ def get_history_manager() -> Optional[DynamoDBHistoryManager]:
     """히스토리 관리자 의존성"""
     return history_manager
 
+from fastapi.responses import RedirectResponse
+
 @app.get("/")
 async def root():
-    """루트 엔드포인트"""
+    """루트 엔드포인트 - 웹 인터페이스로 리다이렉트"""
+    return RedirectResponse(url="/static/index.html")
+
+@app.get("/api")
+async def api_info():
+    """에이피아이 정보"""
     return {
         "message": "Strands Agent Session Manager API",
         "version": "2.0.0",

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class DynamoDBHistoryManager:
     """DynamoDB를 사용한 대화 히스토리 관리자"""
     
-    def __init__(self, table_name: str = "conversation_history", region: str = "us-west-2"):
+    def __init__(self, table_name: str = "conversation_history", region: str = "ap-northeast-2"):
         """
         DynamoDB 히스토리 관리자 초기화
         

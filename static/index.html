@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strands Agent Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .chat-container {
+            width: 90%;
+            max-width: 800px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .chat-header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .session-info {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-content {
+            background: #007bff;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.agent .message-content {
+            background: white;
+            color: #333;
+            border: 1px solid #e9ecef;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-time {
+            font-size: 11px;
+            opacity: 0.6;
+            margin-top: 4px;
+        }
+
+        .chat-input {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            outline: none;
+            font-size: 14px;
+        }
+
+        .message-input:focus {
+            border-color: #007bff;
+        }
+
+        .send-button {
+            padding: 12px 24px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .send-button:hover:not(:disabled) {
+            background: #0056b3;
+        }
+
+        .send-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .agent-selector {
+            margin-bottom: 15px;
+        }
+
+        .agent-selector select {
+            padding: 8px 12px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            background: white;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #6c757d;
+            font-size: 14px;
+        }
+
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e9ecef;
+            border-top: 2px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .system-status {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #c3e6cb;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🤖 Strands Agent Chat</h1>
+            <div class="session-info">
+                세션 ID: <span id="sessionId">연결 중...</span>
+            </div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="system-status" id="systemStatus">
+                시스템 상태를 확인하는 중...
+            </div>
+            
+            <div class="agent-selector">
+                <label for="agentSelect">에이전트 선택:</label>
+                <select id="agentSelect">
+                    <option value="assistant-001">일반 어시스턴트</option>
+                    <option value="support-001">고객 지원</option>
+                    <option value="analyst-001">데이터 분석가</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="chat-input">
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    class="message-input" 
+                    placeholder="메시지를 입력하세요..."
+                    disabled
+                >
+                <button id="sendButton" class="send-button" disabled>전송</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class StrandsChatApp {
+            constructor() {
+                this.apiBase = window.location.origin;
+                this.sessionId = null;
+                this.userId = 'web_user_' + Math.random().toString(36).substr(2, 9);
+                this.currentAgent = 'assistant-001';
+                
+                this.initializeElements();
+                this.setupEventListeners();
+                this.initialize();
+            }
+
+            initializeElements() {
+                this.chatMessages = document.getElementById('chatMessages');
+                this.messageInput = document.getElementById('messageInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.sessionIdSpan = document.getElementById('sessionId');
+                this.agentSelect = document.getElementById('agentSelect');
+                this.systemStatus = document.getElementById('systemStatus');
+            }
+
+            setupEventListeners() {
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.messageInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        this.sendMessage();
+                    }
+                });
+                this.agentSelect.addEventListener('change', (e) => {
+                    this.currentAgent = e.target.value;
+                    this.createNewSession();
+                });
+            }
+
+            async initialize() {
+                try {
+                    await this.checkSystemHealth();
+                    await this.createNewSession();
+                    this.enableInput();
+                } catch (error) {
+                    this.showError('초기화 실패: ' + error.message);
+                }
+            }
+
+            async checkSystemHealth() {
+                try {
+                    const response = await fetch(`${this.apiBase}/health`);
+                    const health = await response.json();
+                    
+                    if (health.status === 'healthy') {
+                        this.systemStatus.innerHTML = `
+                            ✅ 시스템 정상 | 
+                            저장소: ${health.storage} | 
+                            Strands Agent: ${health.strands_agent}
+                        `;
+                        this.systemStatus.className = 'system-status';
+                    } else {
+                        throw new Error('시스템이 정상적이지 않습니다');
+                    }
+                } catch (error) {
+                    this.systemStatus.innerHTML = '❌ 시스템 상태 확인 실패';
+                    this.systemStatus.className = 'error-message';
+                    throw error;
+                }
+            }
+
+            async createNewSession() {
+                try {
+                    const response = await fetch(`${this.apiBase}/sessions`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            user_id: this.userId,
+                            agent_id: this.currentAgent,
+                            metadata: {
+                                source: 'web_chat',
+                                agent_type: this.currentAgent
+                            }
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('세션 생성 실패');
+                    }
+
+                    const session = await response.json();
+                    this.sessionId = session.session_id;
+                    this.sessionIdSpan.textContent = this.sessionId.substring(0, 8) + '...';
+                    
+                    // 기존 메시지 제거 (시스템 상태와 에이전트 선택기 제외)
+                    const messages = this.chatMessages.querySelectorAll('.message');
+                    messages.forEach(msg => msg.remove());
+                    
+                    this.addMessage('agent', `안녕하세요! ${this.getAgentName()}입니다. 무엇을 도와드릴까요?`);
+                } catch (error) {
+                    this.showError('세션 생성 실패: ' + error.message);
+                    throw error;
+                }
+            }
+
+            getAgentName() {
+                const agentNames = {
+                    'assistant-001': '일반 어시스턴트',
+                    'support-001': '고객 지원 담당자',
+                    'analyst-001': '데이터 분석 전문가'
+                };
+                return agentNames[this.currentAgent] || '어시스턴트';
+            }
+
+            async sendMessage() {
+                const message = this.messageInput.value.trim();
+                if (!message || !this.sessionId) return;
+
+                this.addMessage('user', message);
+                this.messageInput.value = '';
+                this.disableInput();
+
+                const loadingElement = this.addLoadingMessage();
+
+                try {
+                    const response = await fetch(`${this.apiBase}/sessions/${this.sessionId}/messages`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: this.sessionId,
+                            message: message,
+                            message_type: 'user'
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('메시지 전송 실패');
+                    }
+
+                    const result = await response.json();
+                    this.removeLoadingMessage(loadingElement);
+                    this.addMessage('agent', result.response);
+                } catch (error) {
+                    this.removeLoadingMessage(loadingElement);
+                    this.showError('메시지 전송 실패: ' + error.message);
+                } finally {
+                    this.enableInput();
+                }
+            }
+
+            addMessage(sender, content) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${sender}`;
+                
+                const now = new Date();
+                const timeString = now.toLocaleTimeString('ko-KR', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                });
+
+                messageDiv.innerHTML = `
+                    <div class="message-content">
+                        ${content}
+                        <div class="message-time">${timeString}</div>
+                    </div>
+                `;
+
+                this.chatMessages.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+
+            addLoadingMessage() {
+                const loadingDiv = document.createElement('div');
+                loadingDiv.className = 'message agent';
+                loadingDiv.innerHTML = `
+                    <div class="message-content">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            응답을 생성하는 중...
+                        </div>
+                    </div>
+                `;
+                this.chatMessages.appendChild(loadingDiv);
+                this.scrollToBottom();
+                return loadingDiv;
+            }
+
+            removeLoadingMessage(element) {
+                if (element && element.parentNode) {
+                    element.parentNode.removeChild(element);
+                }
+            }
+
+            showError(message) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = message;
+                this.chatMessages.appendChild(errorDiv);
+                this.scrollToBottom();
+            }
+
+            enableInput() {
+                this.messageInput.disabled = false;
+                this.sendButton.disabled = false;
+                this.messageInput.focus();
+            }
+
+            disableInput() {
+                this.messageInput.disabled = true;
+                this.sendButton.disabled = true;
+            }
+
+            scrollToBottom() {
+                this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+            }
+        }
+
+        // 앱 초기화
+        document.addEventListener('DOMContentLoaded', () => {
+            new StrandsChatApp();
+        });
+    </script>
+</body>
+</html>
