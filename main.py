@@ -15,6 +15,7 @@ from models import (
 from session_manager import SessionManager
 from memory_session_manager import MemorySessionManager
 from strands_client import StrandsAgentClient
+from dynamodb_history_manager import DynamoDBHistoryManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -26,11 +27,12 @@ logger = logging.getLogger(__name__)
 # 전역 변수
 session_manager: Optional[SessionManager] = None
 strands_client: Optional[StrandsAgentClient] = None
+history_manager: Optional[DynamoDBHistoryManager] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
-    global session_manager, strands_client
+    global session_manager, strands_client, history_manager
     
     # 시작 시 초기화
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -59,6 +61,19 @@ async def lifespan(app: FastAPI):
         logger.info("Running in development mode with Strands Agent SDK")
     else:
         logger.info("Running in production mode with AWS Bedrock")
+    
+    # DynamoDB 히스토리 관리자 초기화
+    table_name = os.getenv("DYNAMODB_HISTORY_TABLE", "conversation_history")
+    region = os.getenv("AWS_REGION", "us-west-2")
+    
+    history_manager = DynamoDBHistoryManager(table_name=table_name, region=region)
+    
+    try:
+        await history_manager.create_table_if_not_exists()
+        logger.info("DynamoDB history manager initialized")
+    except Exception as e:
+        logger.warning(f"DynamoDB initialization failed: {e}. History will not be saved to DynamoDB")
+        history_manager = None
     
     logger.info("Application started with Strands Agent integration")
     yield
@@ -94,6 +109,10 @@ def get_strands_client() -> StrandsAgentClient:
     if strands_client is None:
         raise HTTPException(status_code=500, detail="Strands client not initialized")
     return strands_client
+
+def get_history_manager() -> Optional[DynamoDBHistoryManager]:
+    """히스토리 관리자 의존성"""
+    return history_manager
 
 @app.get("/")
 async def root():
@@ -195,7 +214,8 @@ async def send_message(
     session_id: str,
     request: MessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    strands: StrandsAgentClient = Depends(get_strands_client)
+    strands: StrandsAgentClient = Depends(get_strands_client),
+    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
 ):
     """세션에 메시지 전송 (Strands Agent 사용)"""
     # 세션 확인
@@ -207,6 +227,18 @@ async def send_message(
         raise HTTPException(status_code=400, detail="Session is not active")
     
     try:
+        # DynamoDB에서 최근 대화 컨텍스트 가져오기
+        recent_context = []
+        if history_mgr:
+            try:
+                recent_context = await history_mgr.get_recent_context(session_id, limit=5)
+            except Exception as e:
+                logger.warning(f"Failed to get recent context from DynamoDB: {e}")
+                # Fallback to session conversation history
+                recent_context = session.conversation_history[-5:]
+        else:
+            recent_context = session.conversation_history[-5:]
+        
         # Strands Agent에게 메시지 전송
         agent_response = await strands.send_message(
             agent_id=session.agent_id,
@@ -214,7 +246,7 @@ async def send_message(
             session_context={
                 "session_id": session_id,
                 "user_id": session.user_id,
-                "conversation_history": session.conversation_history[-5:],  # 최근 5개 대화만 컨텍스트로 전달
+                "conversation_history": recent_context,
                 "metadata": session.metadata
             }
         )
@@ -227,7 +259,26 @@ async def send_message(
         
         response_text = agent_response.get("response", "")
         
-        # 세션에 대화 기록 추가
+        # DynamoDB에 대화 저장
+        if history_mgr:
+            try:
+                await history_mgr.save_conversation(
+                    session_id=session_id,
+                    user_id=session.user_id,
+                    message=request.message,
+                    response=response_text,
+                    agent_id=session.agent_id,
+                    message_type=request.message_type,
+                    metadata={
+                        "model_provider": agent_response.get("metadata", {}).get("model_provider"),
+                        "model_id": agent_response.get("metadata", {}).get("model_id"),
+                        "timestamp": agent_response.get("timestamp")
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Failed to save conversation to DynamoDB: {e}")
+        
+        # 세션에도 대화 기록 추가 (fallback 및 빠른 접근용)
         await session_mgr.add_message_to_session(
             session_id=session_id,
             message=request.message,
@@ -253,20 +304,139 @@ async def send_message(
 async def get_conversation_history(
     session_id: str,
     limit: int = 50,
-    session_mgr: SessionManager = Depends(get_session_manager)
+    last_key: Optional[str] = None,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
 ):
-    """세션의 대화 기록 조회"""
+    """세션의 대화 기록 조회 (DynamoDB 우선)"""
+    # 세션 존재 확인
     session = await session_mgr.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
+    # DynamoDB에서 히스토리 조회 시도
+    if history_mgr:
+        try:
+            last_evaluated_key = None
+            if last_key:
+                import json
+                last_evaluated_key = json.loads(last_key)
+            
+            result = await history_mgr.get_session_history(
+                session_id=session_id,
+                limit=limit,
+                last_evaluated_key=last_evaluated_key
+            )
+            
+            return {
+                "session_id": session_id,
+                "conversation_history": result['conversations'],
+                "total_messages": result['count'],
+                "has_more": result['has_more'],
+                "last_evaluated_key": json.dumps(result['last_evaluated_key']) if result.get('last_evaluated_key') else None,
+                "source": "dynamodb"
+            }
+        except Exception as e:
+            logger.error(f"Failed to get history from DynamoDB: {e}")
+    
+    # Fallback: 세션에서 히스토리 조회
     history = session.conversation_history[-limit:] if limit > 0 else session.conversation_history
     
     return {
         "session_id": session_id,
         "conversation_history": history,
-        "total_messages": len(session.conversation_history)
+        "total_messages": len(session.conversation_history),
+        "has_more": False,
+        "source": "session"
     }
+
+# DynamoDB 히스토리 관리 엔드포인트
+
+@app.get("/users/{user_id}/history")
+async def get_user_conversation_history(
+    user_id: str,
+    limit: int = 100,
+    last_key: Optional[str] = None,
+    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+):
+    """사용자의 전체 대화 히스토리 조회"""
+    if not history_mgr:
+        raise HTTPException(status_code=503, detail="DynamoDB history manager not available")
+    
+    try:
+        last_evaluated_key = None
+        if last_key:
+            import json
+            last_evaluated_key = json.loads(last_key)
+        
+        result = await history_mgr.get_user_history(
+            user_id=user_id,
+            limit=limit,
+            last_evaluated_key=last_evaluated_key
+        )
+        
+        return {
+            "user_id": user_id,
+            "conversation_history": result['conversations'],
+            "total_messages": result['count'],
+            "has_more": result['has_more'],
+            "last_evaluated_key": json.dumps(result['last_evaluated_key']) if result.get('last_evaluated_key') else None
+        }
+    except Exception as e:
+        logger.error(f"Failed to get user history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve user history")
+
+@app.delete("/sessions/{session_id}/history")
+async def delete_session_history(
+    session_id: str,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+):
+    """세션의 대화 히스토리 삭제"""
+    # 세션 존재 확인
+    session = await session_mgr.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    deleted_count = 0
+    
+    # DynamoDB에서 히스토리 삭제
+    if history_mgr:
+        try:
+            deleted_count = await history_mgr.delete_session_history(session_id)
+        except Exception as e:
+            logger.error(f"Failed to delete history from DynamoDB: {e}")
+    
+    # 세션에서도 히스토리 삭제
+    session.conversation_history = []
+    await session_mgr.update_session(session)
+    
+    return {
+        "message": "Session history deleted successfully",
+        "deleted_count": deleted_count
+    }
+
+@app.get("/admin/history/stats")
+async def get_history_stats(
+    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+):
+    """대화 히스토리 통계 조회"""
+    if not history_mgr:
+        return {
+            "dynamodb_available": False,
+            "message": "DynamoDB history manager not available"
+        }
+    
+    try:
+        stats = await history_mgr.get_conversation_stats()
+        return {
+            "dynamodb_available": True,
+            "total_conversations": stats['total_conversations'],
+            "scanned_count": stats['scanned_count']
+        }
+    except Exception as e:
+        logger.error(f"Failed to get history stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve history statistics")
 
 # Strands Agent 관리 엔드포인트
 
