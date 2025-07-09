@@ -7,7 +7,7 @@ from datetime import datetime
 try:
     from strands import Agent
     from strands.models import BedrockModel
-    from strands.tools import Tool
+    from strands.tools import FunctionTool
     from strands_agents_tools.web_search import WebSearchTool
     from strands_agents_tools.calculator import CalculatorTool
     STRANDS_AVAILABLE = True
@@ -15,7 +15,7 @@ except ImportError as e:
     STRANDS_AVAILABLE = False
     logger.warning(f"Strands import failed: {e}")
     # Mock Tool class for when strands is not available
-    class Tool:
+    class FunctionTool:
         def __init__(self, name, description, function, parameters=None):
             self.name = name
             self.description = description
@@ -89,7 +89,7 @@ class StrandsAgentClient:
             """현재 시간을 반환합니다."""
             return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        time_tool = Tool(
+        time_tool = FunctionTool(
             name="get_current_time",
             description="현재 시간을 조회합니다",
             function=get_current_time
@@ -101,16 +101,10 @@ class StrandsAgentClient:
             """세션 정보를 반환합니다."""
             return f"세션 ID: {session_id}, 상태: 활성"
         
-        session_tool = Tool(
+        session_tool = FunctionTool(
             name="get_session_info",
             description="세션 정보를 조회합니다",
-            function=get_session_info,
-            parameters={
-                "session_id": {
-                    "type": "string",
-                    "description": "세션 ID"
-                }
-            }
+            function=get_session_info
         )
         tools.append(session_tool)
         
