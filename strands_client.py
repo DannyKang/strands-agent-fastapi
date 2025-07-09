@@ -4,6 +4,8 @@ import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 try:
     from strands import Agent
     from strands.models import BedrockModel
@@ -21,8 +23,6 @@ except ImportError as e:
             self.description = description
             self.function = function
             self.parameters = parameters or {}
-
-logger = logging.getLogger(__name__)
 
 class StrandsAgentClient:
     """
