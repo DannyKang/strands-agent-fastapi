@@ -499,7 +499,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error": exc.detail,
+            "error": str(exc.detail),
             "status_code": exc.status_code,
             "timestamp": datetime.utcnow().isoformat()
         }

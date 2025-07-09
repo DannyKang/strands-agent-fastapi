@@ -225,10 +225,21 @@ class StrandsAgentClient:
             import boto3
             import json
             
-            # Bedrock Runtime 클라이언트 생성
+            # Bedrock Runtime 클라이언트 생성 (연결 제한 설정)
+            from botocore.config import Config
+            
+            config = Config(
+                retries={
+                    'max_attempts': 3,
+                    'mode': 'adaptive'
+                },
+                max_pool_connections=10
+            )
+            
             bedrock_runtime = boto3.client(
                 'bedrock-runtime',
-                region_name=self.region
+                region_name=self.region,
+                config=config
             )
             
             # 에이전트별 시스템 프롬프트

@@ -154,7 +154,10 @@ class LangChainHistoryManager:
         """
         try:
             chat_history = self.get_chat_history(session_id)
-            messages = chat_history.messages
+            messages = getattr(chat_history, 'messages', [])
+            
+            if not messages:
+                return []
             
             # 최근 limit*2 개의 메시지 (사용자+AI 쌍)
             recent_messages = messages[-(limit*2):] if len(messages) > limit*2 else messages
@@ -176,6 +179,7 @@ class LangChainHistoryManager:
             
         except Exception as e:
             logger.error(f"Failed to get recent context for {session_id}: {e}")
+            # 에러 발생 시 빈 컨텍스트 반환
             return []
     
     async def delete_session_history(self, session_id: str) -> int:
