@@ -17,6 +17,7 @@ from session_manager import SessionManager
 from memory_session_manager import MemorySessionManager
 from strands_client import StrandsAgentClient
 from dynamodb_history_manager import DynamoDBHistoryManager
+from langchain_history_manager import LangChainHistoryManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -63,17 +64,24 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Running in production mode with AWS Bedrock")
     
-    # DynamoDB 히스토리 관리자 초기화
-    table_name = os.getenv("DYNAMODB_HISTORY_TABLE", "conversation_history")
+    # 히스토리 관리자 초기화 (LangChain 또는 Custom DynamoDB)
+    use_langchain = os.getenv("USE_LANGCHAIN_HISTORY", "true").lower() == "true"
+    table_name = os.getenv("DYNAMODB_HISTORY_TABLE", "langchain_chat_history" if use_langchain else "conversation_history")
     region = os.getenv("AWS_REGION", "ap-northeast-2")
     
-    history_manager = DynamoDBHistoryManager(table_name=table_name, region=region)
+    if use_langchain:
+        history_manager = LangChainHistoryManager(table_name=table_name, region=region)
+        logger.info("Using LangChain DynamoDBChatMessageHistory")
+    else:
+        history_manager = DynamoDBHistoryManager(table_name=table_name, region=region)
+        logger.info("Using Custom DynamoDB History Manager")
     
     try:
-        await history_manager.create_table_if_not_exists()
-        logger.info("DynamoDB history manager initialized")
+        if hasattr(history_manager, 'create_table_if_not_exists'):
+            await history_manager.create_table_if_not_exists()
+        logger.info("History manager initialized successfully")
     except Exception as e:
-        logger.warning(f"DynamoDB initialization failed: {e}. History will not be saved to DynamoDB")
+        logger.warning(f"History manager initialization failed: {e}. History will not be saved")
         history_manager = None
     
     logger.info("Application started with Strands Agent integration")
@@ -114,7 +122,7 @@ def get_strands_client() -> StrandsAgentClient:
         raise HTTPException(status_code=500, detail="Strands client not initialized")
     return strands_client
 
-def get_history_manager() -> Optional[DynamoDBHistoryManager]:
+def get_history_manager():
     """히스토리 관리자 의존성"""
     return history_manager
 
@@ -227,7 +235,7 @@ async def send_message(
     request: MessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     strands: StrandsAgentClient = Depends(get_strands_client),
-    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+    history_mgr = Depends(get_history_manager)
 ):
     """세션에 메시지 전송 (Strands Agent 사용)"""
     # 세션 확인
@@ -318,7 +326,7 @@ async def get_conversation_history(
     limit: int = 50,
     last_key: Optional[str] = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+    history_mgr = Depends(get_history_manager)
 ):
     """세션의 대화 기록 조회 (DynamoDB 우선)"""
     # 세션 존재 확인
@@ -369,7 +377,7 @@ async def get_user_conversation_history(
     user_id: str,
     limit: int = 100,
     last_key: Optional[str] = None,
-    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+    history_mgr = Depends(get_history_manager)
 ):
     """사용자의 전체 대화 히스토리 조회"""
     if not history_mgr:
@@ -402,7 +410,7 @@ async def get_user_conversation_history(
 async def delete_session_history(
     session_id: str,
     session_mgr: SessionManager = Depends(get_session_manager),
-    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+    history_mgr = Depends(get_history_manager)
 ):
     """세션의 대화 히스토리 삭제"""
     # 세션 존재 확인
@@ -430,7 +438,7 @@ async def delete_session_history(
 
 @app.get("/admin/history/stats")
 async def get_history_stats(
-    history_mgr: Optional[DynamoDBHistoryManager] = Depends(get_history_manager)
+    history_mgr = Depends(get_history_manager)
 ):
     """대화 히스토리 통계 조회"""
     if not history_mgr:
