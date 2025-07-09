@@ -22,15 +22,14 @@ class LangChainHistoryManager:
         
     def get_chat_history(self, session_id: str) -> DynamoDBChatMessageHistory:
         """세션별 채팅 히스토리 객체 반환"""
-        import boto3
+        import os
         
-        # DynamoDB 리소스를 직접 전달
-        dynamodb = boto3.resource('dynamodb', region_name=self.region)
+        # 환경 변수로 AWS 리전 설정
+        os.environ['AWS_DEFAULT_REGION'] = self.region
         
         return DynamoDBChatMessageHistory(
             table_name=self.table_name,
-            session_id=session_id,
-            dynamodb_resource=dynamodb
+            session_id=session_id
         )
     
     async def save_conversation(
