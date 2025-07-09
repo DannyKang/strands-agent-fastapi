@@ -36,7 +36,7 @@ class StrandsAgentClient:
             region: AWS 리전
         """
         self.model_provider = model_provider
-        self.model_id = model_id or "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        self.model_id = model_id or "anthropic.claude-3-5-sonnet-20241022-v2:0"
         self.region = region
         self.agents = {}  # 에이전트 인스턴스 캐시
         
@@ -230,10 +230,10 @@ class StrandsAgentClient:
             
             config = Config(
                 retries={
-                    'max_attempts': 3,
-                    'mode': 'adaptive'
+                    'max_attempts': 2,
+                    'mode': 'standard'
                 },
-                max_pool_connections=10
+                max_pool_connections=5
             )
             
             bedrock_runtime = boto3.client(
@@ -266,6 +266,9 @@ class StrandsAgentClient:
                     }
                 ]
             }
+            
+            # 연결 제한 방지를 위한 대기
+            await asyncio.sleep(0.5)
             
             # Bedrock API 호출
             response = bedrock_runtime.invoke_model(

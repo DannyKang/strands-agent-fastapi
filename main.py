@@ -307,9 +307,10 @@ async def send_message(
         )
         
         if not agent_response.get("success", False):
+            error_msg = str(agent_response.get('error', 'Unknown error'))
             raise HTTPException(
                 status_code=500, 
-                detail=f"Strands Agent communication failed: {agent_response.get('error', 'Unknown error')}"
+                detail=f"Strands Agent communication failed: {error_msg}"
             )
         
         response_text = agent_response.get("response", "")
