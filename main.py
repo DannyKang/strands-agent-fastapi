@@ -5,9 +5,10 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
 import os
+import json
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from models import (
     StrandsSession, CreateSessionRequest, MessageRequest, MessageResponse,
@@ -25,6 +26,35 @@ load_dotenv()
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# JSON 직렬화 유틸리티
+def json_serializer(obj: Any) -> Any:
+    """JSON 직렬화를 위한 커스텀 시리얼라이저"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+def safe_json_response(data: dict, status_code: int = 200) -> JSONResponse:
+    """안전한 JSON 응답 생성"""
+    try:
+        json_str = json.dumps(data, default=json_serializer, ensure_ascii=False)
+        return JSONResponse(content=json.loads(json_str), status_code=status_code)
+    except Exception as e:
+        logger.error(f"JSON serialization error: {e}")
+        # datetime 객체를 문자열로 변환하여 재시도
+        safe_data = convert_datetime_to_str(data)
+        return JSONResponse(content=safe_data, status_code=status_code)
+
+def convert_datetime_to_str(obj: Any) -> Any:
+    """datetime 객체를 문자열로 재귀적으로 변환"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: convert_datetime_to_str(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_datetime_to_str(item) for item in obj]
+    else:
+        return obj
 
 # 전역 변수
 session_manager: Optional[SessionManager] = None
