@@ -24,7 +24,6 @@ class CreateSessionRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="추가 메타데이터")
 
 class MessageRequest(BaseModel):
-    session_id: str = Field(..., description="세션 ID")
     message: str = Field(..., description="사용자 메시지")
     message_type: str = Field(default="user", description="메시지 타입")
 

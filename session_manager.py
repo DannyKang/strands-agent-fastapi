@@ -144,31 +144,6 @@ class SessionManager:
         logger.info(f"Deleted session {session_id}")
         return True
     
-    async def get_user_sessions(self, user_id: str, active_only: bool = True) -> List[StrandsSession]:
-        """
-        사용자의 세션 목록 조회
-        
-        Args:
-            user_id: 사용자 ID
-            active_only: 활성 세션만 조회할지 여부
-            
-        Returns:
-            세션 목록
-        """
-        user_sessions_key = self._get_user_sessions_key(user_id)
-        session_ids = self.redis_client.smembers(user_sessions_key)
-        
-        sessions = []
-        for session_id in session_ids:
-            session = await self.get_session(session_id)
-            if session:
-                if not active_only or session.status == SessionStatus.ACTIVE:
-                    sessions.append(session)
-        
-        # 마지막 활동 시간 기준으로 정렬
-        sessions.sort(key=lambda x: x.last_activity, reverse=True)
-        return sessions
-    
     async def add_message_to_session(self, session_id: str, message: str, response: str, message_type: str = "user") -> bool:
         """
         세션에 메시지 추가
@@ -237,3 +212,42 @@ class SessionManager:
         
         logger.info(f"Expired {expired_count} old sessions")
         return expired_count
+    
+    async def get_user_sessions(self, user_id: str, limit: int = 20) -> List[StrandsSession]:
+        """
+        사용자의 모든 세션 조회
+        
+        Args:
+            user_id: 사용자 ID
+            limit: 조회할 세션 수 제한
+            
+        Returns:
+            사용자의 세션 목록
+        """
+        try:
+            # Redis에서 사용자의 모든 세션 키 조회
+            pattern = f"{self.session_prefix}*"
+            session_keys = self.redis_client.keys(pattern)
+            
+            user_sessions = []
+            for key in session_keys:
+                try:
+                    session_data = self.redis_client.get(key)
+                    if session_data:
+                        session_dict = json.loads(session_data)
+                        if session_dict.get('user_id') == user_id:
+                            session = StrandsSession(**session_dict)
+                            user_sessions.append(session)
+                except Exception as e:
+                    logger.warning(f"Failed to parse session {key}: {e}")
+                    continue
+            
+            # 최근 활동 순으로 정렬
+            user_sessions.sort(key=lambda x: x.last_activity, reverse=True)
+            
+            # 제한된 수만 반환
+            return user_sessions[:limit]
+            
+        except Exception as e:
+            logger.error(f"Failed to get user sessions for {user_id}: {e}")
+            return []

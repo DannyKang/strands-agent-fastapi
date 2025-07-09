@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -77,16 +77,26 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Redis connection failed: {e}. Using memory-based session manager")
         session_manager = MemorySessionManager()
     
-    # Strands Agent 클라이언트 초기화
+    # Strands Agent 클라이언트 초기화 (최신 SDK)
     model_provider = os.getenv("STRANDS_MODEL_PROVIDER", "bedrock")
-    model_id = os.getenv("STRANDS_MODEL_ID", "anthropic.claude-3-7-sonnet-20250219-v1:0")
+    model_id = os.getenv("STRANDS_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
     region = os.getenv("STRANDS_REGION", "ap-northeast-2")
     development_mode = os.getenv("DEVELOPMENT_MODE", "true").lower() == "true"
+    
+    # 추가 모델 설정
+    model_kwargs = {}
+    if model_provider == "bedrock":
+        model_kwargs.update({
+            "max_tokens": 4096,
+            "temperature": 0.7,
+            "top_p": 0.9
+        })
     
     strands_client = StrandsAgentClient(
         model_provider=model_provider,
         model_id=model_id,
-        region=region
+        region=region,
+        **model_kwargs
     )
     
     if development_mode:
@@ -140,6 +150,18 @@ app.add_middleware(
 # 정적 파일 서빙
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# 루트 경로 핸들러
+@app.get("/")
+async def root():
+    """루트 경로 - 메인 페이지로 리다이렉트"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/index.html", status_code=307)
+
+@app.get("/favicon.ico")
+async def favicon():
+    """파비콘 요청 처리"""
+    return JSONResponse({"message": "No favicon"}, status_code=404)
+
 def get_session_manager() -> SessionManager:
     """세션 매니저 의존성"""
     if session_manager is None:
@@ -183,7 +205,7 @@ async def api_info():
 
 @app.get("/health")
 async def health_check():
-    """헬스 체크 엔드포인트"""
+    """헬스 체크 엔드포인트 (최신 Strands Agent SDK)"""
     try:
         # 세션 관리자 연결 확인
         session_mgr = get_session_manager()
@@ -194,23 +216,70 @@ async def health_check():
             session_mgr.ping()
             storage_type = "memory"
         
-        # Strands Agent 상태 확인
+        # Strands Agent 상태 확인 (최신 API)
         strands = get_strands_client()
-        capabilities = await strands.get_agent_capabilities()
+        health_result = await strands.health_check()
         
         return {
             "status": "healthy",
             "storage": storage_type,
-            "strands_agent": "available" if capabilities.get("success") else "limited",
+            "strands_agent": health_result.get("health", {}).get("overall_status", "unknown"),
             "timestamp": datetime.utcnow().isoformat(),
             "components": {
                 "session_manager": "ok",
                 "strands_client": "ok",
                 "storage": "ok"
-            }
+            },
+            "strands_details": health_result.get("health", {})
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
+
+# 인증 관련 엔드포인트
+
+@app.post("/auth/login")
+async def login(request: dict):
+    """
+    사용자 로그인 (간단한 사용자 ID 기반)
+    """
+    try:
+        user_id = request.get("user_id", "").strip()
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID is required")
+        
+        # 간단한 사용자 ID 검증 (실제 환경에서는 더 복잡한 인증 로직 필요)
+        if len(user_id) < 2:
+            raise HTTPException(status_code=400, detail="User ID must be at least 2 characters")
+        
+        # 사용자 정보 반환 (실제 환경에서는 JWT 토큰 등 사용)
+        return safe_json_response({
+            "success": True,
+            "user_id": user_id,
+            "message": "Login successful",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        return safe_json_response({
+            "success": False,
+            "error": "Login failed",
+            "detail": str(e)
+        }, status_code=500)
+
+@app.post("/auth/logout")
+async def logout():
+    """
+    사용자 로그아웃
+    """
+    return safe_json_response({
+        "success": True,
+        "message": "Logout successful",
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
 # 세션 관리 엔드포인트
 
@@ -253,19 +322,9 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
     return {"message": "Session deleted successfully"}
 
-@app.get("/users/{user_id}/sessions", response_model=List[StrandsSession])
-async def get_user_sessions(
-    user_id: str,
-    active_only: bool = True,
-    session_mgr: SessionManager = Depends(get_session_manager)
-):
-    """사용자의 세션 목록 조회"""
-    sessions = await session_mgr.get_user_sessions(user_id, active_only)
-    return sessions
-
 # 메시지 처리 엔드포인트
 
-@app.post("/sessions/{session_id}/messages", response_model=MessageResponse)
+@app.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
     request: MessageRequest,
@@ -273,17 +332,17 @@ async def send_message(
     strands: StrandsAgentClient = Depends(get_strands_client),
     history_mgr = Depends(get_history_manager)
 ):
-    """세션에 메시지 전송 (Strands Agent 사용)"""
-    # 세션 확인
-    session = await session_mgr.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if session.status != SessionStatus.ACTIVE:
-        raise HTTPException(status_code=400, detail="Session is not active")
-    
+    """세션에 메시지 전송 (실제 Strands Agent 사용)"""
     try:
-        # DynamoDB에서 최근 대화 컨텍스트 가져오기
+        # 세션 확인
+        session = await session_mgr.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if session.status != SessionStatus.ACTIVE:
+            raise HTTPException(status_code=400, detail="Session is not active")
+        
+        # 최근 대화 컨텍스트 가져오기 (에러 처리 개선)
         recent_context = []
         if history_mgr:
             try:
@@ -291,32 +350,37 @@ async def send_message(
             except Exception as e:
                 logger.warning(f"Failed to get recent context from DynamoDB: {e}")
                 # Fallback to session conversation history
-                recent_context = session.conversation_history[-5:]
+                recent_context = session.conversation_history[-5:] if session.conversation_history else []
         else:
-            recent_context = session.conversation_history[-5:]
+            recent_context = session.conversation_history[-5:] if session.conversation_history else []
         
-        # Strands Agent에게 메시지 전송
-        agent_response = await strands.send_message(
-            agent_id=session.agent_id,
-            message=request.message,
-            session_context={
-                "session_id": session_id,
-                "user_id": session.user_id,
-                "conversation_history": recent_context,
-                "metadata": session.metadata
-            }
-        )
-        
-        if not agent_response.get("success", False):
-            error_msg = str(agent_response.get('error', 'Unknown error'))
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Strands Agent communication failed: {error_msg}"
+        # 실제 Strands Agent에게 메시지 전송
+        try:
+            agent_response = await strands.send_message(
+                agent_id=session.agent_id,
+                message=request.message,
+                session_context={
+                    "session_id": session_id,
+                    "user_id": session.user_id,
+                    "conversation_history": recent_context,
+                    "metadata": session.metadata
+                }
             )
+            
+            if not agent_response.get("success", False):
+                error_msg = str(agent_response.get('error', 'Unknown error'))
+                logger.error(f"Strands Agent failed: {error_msg}")
+                # Fallback response
+                response_text = f"죄송합니다. 현재 AI 에이전트에 일시적인 문제가 있습니다. 에러: {error_msg}"
+            else:
+                response_text = agent_response.get("response", "응답을 생성할 수 없습니다.")
+                
+        except Exception as e:
+            logger.error(f"Strands Agent call failed: {e}")
+            # Fallback response
+            response_text = f"죄송합니다. AI 에이전트 호출 중 오류가 발생했습니다: {str(e)}"
         
-        response_text = agent_response.get("response", "")
-        
-        # DynamoDB에 대화 저장
+        # DynamoDB에 대화 저장 (에러 처리 개선)
         if history_mgr:
             try:
                 await history_mgr.save_conversation(
@@ -327,35 +391,44 @@ async def send_message(
                     agent_id=session.agent_id,
                     message_type=request.message_type,
                     metadata={
-                        "model_provider": agent_response.get("metadata", {}).get("model_provider"),
-                        "model_id": agent_response.get("metadata", {}).get("model_id"),
-                        "timestamp": agent_response.get("timestamp")
+                        "model_provider": "strands",
+                        "timestamp": datetime.utcnow().isoformat()
                     }
                 )
             except Exception as e:
-                logger.error(f"Failed to save conversation to DynamoDB: {e}")
+                logger.warning(f"Failed to save conversation to DynamoDB: {e}")
         
-        # 세션에도 대화 기록 추가 (fallback 및 빠른 접근용)
-        await session_mgr.add_message_to_session(
-            session_id=session_id,
-            message=request.message,
-            response=response_text,
-            message_type=request.message_type
-        )
+        # 세션에도 대화 기록 추가
+        try:
+            await session_mgr.add_message_to_session(
+                session_id=session_id,
+                message=request.message,
+                response=response_text,
+                message_type=request.message_type
+            )
+        except Exception as e:
+            logger.warning(f"Failed to add message to session: {e}")
         
-        return MessageResponse(
-            session_id=session_id,
-            message=request.message,
-            response=response_text,
-            timestamp=session.last_activity,
-            agent_id=session.agent_id
-        )
+        # 응답 반환
+        response_data = {
+            "session_id": session_id,
+            "message": request.message,
+            "response": response_text,
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent_id": session.agent_id
+        }
+        
+        return safe_json_response(response_data)
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to process message for session {session_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process message")
+        return safe_json_response({
+            "error": "Failed to process message",
+            "detail": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }, status_code=500)
 
 @app.get("/sessions/{session_id}/history")
 async def get_conversation_history(
@@ -408,6 +481,49 @@ async def get_conversation_history(
     }
 
 # DynamoDB 히스토리 관리 엔드포인트
+
+@app.get("/users/{user_id}/sessions")
+async def get_user_sessions(
+    user_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    session_mgr: SessionManager = Depends(get_session_manager)
+):
+    """사용자의 세션 목록 조회 (대화 히스토리 대안)"""
+    try:
+        # 사용자의 모든 세션 조회
+        sessions = await session_mgr.get_user_sessions(user_id, limit=limit)
+        
+        # 각 세션의 기본 정보와 최근 대화 포함
+        session_summaries = []
+        for session in sessions:
+            # 최근 대화 1개 가져오기
+            last_conversation = None
+            if session.conversation_history:
+                last_conversation = session.conversation_history[-1]
+            
+            session_summaries.append({
+                "session_id": session.session_id,
+                "agent_id": session.agent_id,
+                "status": session.status.value,
+                "created_at": session.created_at.isoformat(),
+                "last_activity": session.last_activity.isoformat(),
+                "total_messages": len(session.conversation_history),
+                "last_conversation": last_conversation
+            })
+        
+        return safe_json_response({
+            "user_id": user_id,
+            "sessions": session_summaries,
+            "total_sessions": len(session_summaries),
+            "note": "Use /sessions/{session_id}/history to get full conversation history for each session"
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get user sessions for {user_id}: {e}")
+        return safe_json_response({
+            "error": "Failed to get user sessions",
+            "detail": str(e)
+        }, status_code=500)
 
 @app.get("/users/{user_id}/history")
 async def get_user_conversation_history(
@@ -498,35 +614,36 @@ async def get_history_stats(
 # 예외 처리기
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    content = jsonable_encoder({
+    content = {
         "error": str(exc.detail),
         "status_code": exc.status_code,
-        "timestamp": datetime.utcnow()
-    })
-    return JSONResponse(status_code=exc.status_code, content=content)
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    return safe_json_response(content, status_code=exc.status_code)
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")
-    content = jsonable_encoder({
+    content = {
         "error": "Internal server error",
         "message": str(exc),
-        "timestamp": datetime.utcnow()
-    })
-    return JSONResponse(status_code=500, content=content)
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    return safe_json_response(content, status_code=500)
 
-# Strands Agent 관리 엔드포인트
+# Strands Agent 관리 엔드포인트 (최신 SDK)
 
 @app.get("/agents")
 async def list_agents(strands: StrandsAgentClient = Depends(get_strands_client)):
-    """사용 가능한 Strands Agent 목록 조회"""
+    """사용 가능한 Strands Agent 목록 조회 (최신 API)"""
     result = await strands.list_agents()
     if not result.get("success", False):
         raise HTTPException(status_code=500, detail="Failed to fetch agents")
     return {
         "agents": result.get("agents", []),
         "total": result.get("total", 0),
-        "strands_available": result.get("strands_available", False)
+        "system_status": result.get("system_status", {}),
+        "strands_available": result.get("system_status", {}).get("strands_available", False)
     }
 
 @app.get("/agents/{agent_id}")
@@ -534,7 +651,7 @@ async def get_agent_info(
     agent_id: str,
     strands: StrandsAgentClient = Depends(get_strands_client)
 ):
-    """Strands Agent 정보 조회"""
+    """Strands Agent 정보 조회 (최신 API)"""
     result = await strands.get_agent_info(agent_id)
     if not result.get("success", False):
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -542,11 +659,28 @@ async def get_agent_info(
 
 @app.get("/agents/capabilities")
 async def get_agent_capabilities(strands: StrandsAgentClient = Depends(get_strands_client)):
-    """Strands Agent 기능 정보 조회"""
-    result = await strands.get_agent_capabilities()
+    """Strands Agent 기능 정보 조회 (최신 API)"""
+    result = await strands.get_capabilities()
     if not result.get("success", False):
         raise HTTPException(status_code=500, detail="Failed to get capabilities")
     return result.get("capabilities", {})
+
+@app.post("/debug/test-strands")
+async def test_strands_directly(strands: StrandsAgentClient = Depends(get_strands_client)):
+    """Debug endpoint to test Strands Agent directly"""
+    try:
+        result = await strands.send_message(
+            agent_id="assistant-001",
+            message="Hello, this is a test message",
+            session_context={"session_id": "debug", "user_id": "debug_user"}
+        )
+        return safe_json_response(result)
+    except Exception as e:
+        return safe_json_response({
+            "error": str(e),
+            "type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }, status_code=500)
 
 # 스트리밍 메시지 엔드포인트 (향후 구현)
 @app.post("/sessions/{session_id}/messages/stream")
@@ -577,14 +711,15 @@ async def get_stats(
     session_mgr: SessionManager = Depends(get_session_manager),
     strands: StrandsAgentClient = Depends(get_strands_client)
 ):
-    """시스템 통계 조회"""
+    """시스템 통계 조회 (최신 Strands Agent SDK)"""
     try:
         # Redis에서 세션 관련 키 개수 조회
         session_keys = session_mgr.redis_client.keys(f"{session_mgr.session_prefix}*")
         user_session_keys = session_mgr.redis_client.keys(f"{session_mgr.user_sessions_prefix}*")
         
-        # Strands Agent 정보
-        capabilities = await strands.get_agent_capabilities()
+        # Strands Agent 정보 (최신 API)
+        capabilities = await strands.get_capabilities()
+        health_check = await strands.health_check()
         
         return {
             "sessions": {
@@ -593,14 +728,16 @@ async def get_stats(
             },
             "strands_agent": {
                 "available": capabilities.get("success", False),
-                "sdk_version": capabilities.get("strands_sdk_version", "unknown"),
+                "sdk_info": capabilities.get("capabilities", {}).get("sdk_info", {}),
                 "model_provider": strands.model_provider,
-                "model_id": strands.model_id
+                "model_id": strands.model_id,
+                "health_status": health_check.get("health", {}).get("overall_status", "unknown")
             },
             "redis": {
                 "connected": True,
                 "url": session_mgr.redis_client.connection_pool.connection_kwargs.get("host", "localhost")
-            }
+            },
+            "system_health": health_check.get("health", {})
         }
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")

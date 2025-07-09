@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from langchain.memory import DynamoDBChatMessageHistory
+from langchain_community.chat_message_histories import DynamoDBChatMessageHistory
 from langchain.schema import HumanMessage, AIMessage, BaseMessage
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,48 @@ class LangChainHistoryManager:
         """
         self.table_name = table_name
         self.region = region
+        
+    async def ensure_table_exists(self):
+        """DynamoDB 테이블이 존재하는지 확인하고 없으면 생성"""
+        try:
+            import boto3
+            dynamodb = boto3.client('dynamodb', region_name=self.region)
+            
+            # 테이블 존재 확인
+            dynamodb.describe_table(TableName=self.table_name)
+            logger.info(f"DynamoDB table {self.table_name} exists")
+        except dynamodb.exceptions.ResourceNotFoundException:
+            logger.info(f"Creating DynamoDB table {self.table_name}")
+            try:
+                # LangChain DynamoDB 테이블 생성
+                dynamodb.create_table(
+                    TableName=self.table_name,
+                    KeySchema=[
+                        {
+                            'AttributeName': 'SessionId',
+                            'KeyType': 'HASH'
+                        }
+                    ],
+                    AttributeDefinitions=[
+                        {
+                            'AttributeName': 'SessionId',
+                            'AttributeType': 'S'
+                        }
+                    ],
+                    BillingMode='PAY_PER_REQUEST'
+                )
+                
+                # 테이블 생성 완료까지 대기
+                waiter = dynamodb.get_waiter('table_exists')
+                waiter.wait(TableName=self.table_name)
+                logger.info(f"Successfully created DynamoDB table {self.table_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to create DynamoDB table {self.table_name}: {e}")
+                raise
+        except Exception as e:
+            if "ResourceNotFoundException" not in str(e):
+                logger.error(f"Error checking DynamoDB table {self.table_name}: {e}")
         
     def get_chat_history(self, session_id: str) -> DynamoDBChatMessageHistory:
         """세션별 채팅 히스토리 객체 반환"""
@@ -94,17 +136,12 @@ class LangChainHistoryManager:
         last_evaluated_key: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
-        세션의 대화 히스토리 조회
-        
-        Args:
-            session_id: 세션 ID
-            limit: 조회할 대화 수
-            last_evaluated_key: 페이지네이션용 키 (LangChain에서는 미지원)
-            
-        Returns:
-            대화 히스토리와 페이지네이션 정보
+        세션의 대화 히스토리 조회 (DynamoDB 테이블 없음 처리 개선)
         """
         try:
+            # 테이블 존재 확인 및 생성
+            await self.ensure_table_exists()
+            
             chat_history = self.get_chat_history(session_id)
             messages = chat_history.messages
             
@@ -119,22 +156,33 @@ class LangChainHistoryManager:
                     human_msg = messages[i]
                     ai_msg = messages[i + 1]
                     
-                    conversation = {
-                        'session_id': session_id,
-                        'timestamp': ai_msg.additional_kwargs.get('timestamp', datetime.utcnow().isoformat()),
-                        'message': human_msg.content,
-                        'response': ai_msg.content,
-                        'user_id': ai_msg.additional_kwargs.get('user_id', ''),
-                        'agent_id': ai_msg.additional_kwargs.get('agent_id', ''),
-                        'message_type': 'user'
-                    }
-                    conversations.append(conversation)
+                    conversations.append({
+                        "message": human_msg.content,
+                        "response": ai_msg.content,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message_type": "user"
+                    })
             
             return {
-                'conversations': conversations,
-                'count': len(conversations),
-                'last_evaluated_key': None,  # LangChain에서는 페이지네이션 미지원
-                'has_more': False
+                "conversations": conversations,
+                "count": len(conversations),
+                "has_more": False,  # LangChain doesn't support pagination
+                "last_evaluated_key": None
+            }
+            
+        except Exception as e:
+            # DynamoDB 테이블이 없거나 다른 에러 발생 시 빈 결과 반환
+            if "ResourceNotFoundException" in str(e) or "Requested resource not found" in str(e):
+                logger.info(f"DynamoDB table not found for session {session_id}, returning empty history")
+            else:
+                logger.error(f"Failed to get session history for {session_id}: {e}")
+            
+            # 에러가 발생해도 빈 결과 반환하여 앱이 계속 동작하도록 함
+            return {
+                "conversations": [],
+                "count": 0,
+                "has_more": False,
+                "last_evaluated_key": None
             }
             
         except Exception as e:
