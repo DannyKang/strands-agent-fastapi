@@ -128,6 +128,11 @@ def get_history_manager():
 
 from fastapi.responses import RedirectResponse
 import json
+from datetime import datetime
+from fastapi import Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 @app.get("/")
 async def root():
@@ -457,6 +462,30 @@ async def get_history_stats(
     except Exception as e:
         logger.error(f"Failed to get history stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve history statistics")
+
+# 예외 처리기
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": str(exc),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
 
 # Strands Agent 관리 엔드포인트
 
