@@ -30,3 +30,6 @@ Thumbs.db
 # Application specific
 *.db
 *.sqlite3
+
+# Prompt files
+REGENERATION_PROMPT.md
