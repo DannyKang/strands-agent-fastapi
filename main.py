@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
     
     # DynamoDB 히스토리 관리자 초기화
     table_name = os.getenv("DYNAMODB_HISTORY_TABLE", "conversation_history")
-    region = os.getenv("AWS_REGION", "us-west-2")
+    region = os.getenv("AWS_REGION", "ap-northeast-2")
     
     history_manager = DynamoDBHistoryManager(table_name=table_name, region=region)
     
