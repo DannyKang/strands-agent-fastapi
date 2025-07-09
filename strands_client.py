@@ -179,7 +179,8 @@ class StrandsAgentClient:
             에이전트 응답
         """
         if not STRANDS_AVAILABLE:
-            return await self._mock_send_message(agent_id, message, session_context)
+            # Strands SDK가 없으면 직접 Bedrock 호출
+            return await self._direct_bedrock_call(agent_id, message, session_context)
         
         try:
             # 에이전트 인스턴스 가져오기 또는 생성
@@ -216,6 +217,78 @@ class StrandsAgentClient:
                 "success": False,
                 "error": str(e),
                 "response": f"죄송합니다. 에이전트 처리 중 오류가 발생했습니다: {str(e)}"
+            }
+    
+    async def _direct_bedrock_call(self, agent_id: str, message: str, session_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """직접 Bedrock API 호출 (Strands SDK가 없을 때)"""
+        try:
+            import boto3
+            import json
+            
+            # Bedrock Runtime 클라이언트 생성
+            bedrock_runtime = boto3.client(
+                'bedrock-runtime',
+                region_name=self.region
+            )
+            
+            # 에이전트별 시스템 프롬프트
+            system_prompt = self._get_default_system_prompt(agent_id)
+            
+            # 대화 컨텍스트 추가
+            context_message = ""
+            if session_context and session_context.get('conversation_history'):
+                context_message = "\n\n이전 대화:\n"
+                for conv in session_context['conversation_history'][-3:]:  # 최근 3개만
+                    context_message += f"사용자: {conv.get('message', '')}\n"
+                    context_message += f"AI: {conv.get('response', '')}\n"
+            
+            # Claude 3.7 Sonnet 모델에 맞는 요청 바디 구성
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "temperature": 0.7,
+                "system": system_prompt,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": context_message + "\n\n" + message
+                    }
+                ]
+            }
+            
+            # Bedrock API 호출
+            response = bedrock_runtime.invoke_model(
+                modelId=self.model_id,
+                body=json.dumps(request_body)
+            )
+            
+            # 응답 파싱
+            response_body = json.loads(response['body'].read())
+            
+            if 'content' in response_body and len(response_body['content']) > 0:
+                ai_response = response_body['content'][0]['text']
+            else:
+                ai_response = "죄송합니다. 응답을 생성할 수 없습니다."
+            
+            return {
+                "success": True,
+                "response": ai_response,
+                "agent_id": agent_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metadata": {
+                    "mode": "bedrock_direct",
+                    "model_provider": self.model_provider,
+                    "model_id": self.model_id,
+                    "strands_available": False
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Bedrock API 호출 오류: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"죄송합니다. Bedrock API 호출 중 오류가 발생했습니다: {str(e)}"
             }
     
     async def _mock_send_message(self, agent_id: str, message: str, session_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
