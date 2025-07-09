@@ -6,13 +6,14 @@ from datetime import datetime
 
 try:
     from strands import Agent
-    from strands.models import BedrockModelProvider
+    from strands.models import BedrockModel
     from strands.tools import Tool
     from strands_agents_tools.web_search import WebSearchTool
     from strands_agents_tools.calculator import CalculatorTool
     STRANDS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     STRANDS_AVAILABLE = False
+    logger.warning(f"Strands import failed: {e}")
     # Mock Tool class for when strands is not available
     class Tool:
         def __init__(self, name, description, function, parameters=None):
@@ -125,9 +126,9 @@ class StrandsAgentClient:
             system_prompt = self._get_default_system_prompt(agent_id)
         
         try:
-            # Bedrock 모델 제공자 설정
+            # Bedrock 모델 설정
             if self.model_provider == "bedrock":
-                model_provider = BedrockModelProvider(
+                model = BedrockModel(
                     model_id=self.model_id,
                     region=self.region
                 )
@@ -137,7 +138,7 @@ class StrandsAgentClient:
             
             # 에이전트 생성
             agent = Agent(
-                model_provider=model_provider,
+                model=model,
                 tools=self.default_tools,
                 system_prompt=system_prompt,
                 max_iterations=10,
