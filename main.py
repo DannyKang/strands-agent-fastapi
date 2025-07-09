@@ -163,6 +163,7 @@ from fastapi import Request
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.encoders import jsonable_encoder
 
 @app.get("/")
 async def root():
@@ -497,26 +498,22 @@ async def get_history_stats(
 # 예외 처리기
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": str(exc.detail),
-            "status_code": exc.status_code,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
+    content = jsonable_encoder({
+        "error": str(exc.detail),
+        "status_code": exc.status_code,
+        "timestamp": datetime.utcnow()
+    })
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
+    content = jsonable_encoder({
+        "error": "Internal server error",
+        "message": str(exc),
+        "timestamp": datetime.utcnow()
+    })
+    return JSONResponse(status_code=500, content=content)
 
 # Strands Agent 관리 엔드포인트
 
