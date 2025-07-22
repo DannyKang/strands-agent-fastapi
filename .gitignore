@@ -34,3 +34,6 @@ Thumbs.db
 
 # Prompt files
 REGENERATION_PROMPT.md
+
+# backup files
+*.backup
