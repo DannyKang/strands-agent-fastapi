@@ -18,7 +18,7 @@ Resources:
   LongTermMemoryTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '-user-long-term-memory-'
+      TableName: !Sub '${ProjectName}-user-long-term-memory-${Environment}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: user_id
@@ -43,7 +43,7 @@ Resources:
   LTMTableReadThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub '-ltm-table-read-throttle-'
+      AlarmName: !Sub '${ProjectName}-ltm-table-read-throttle-${Environment}'
       AlarmDescription: 'LTM table read throttling detected'
       MetricName: ReadThrottledEvents
       Namespace: AWS/DynamoDB
@@ -60,7 +60,7 @@ Resources:
   LTMTableWriteThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub '-ltm-table-write-throttle-'
+      AlarmName: !Sub '${ProjectName}-ltm-table-write-throttle-${Environment}'
       AlarmDescription: 'LTM table write throttling detected'
       MetricName: WriteThrottledEvents
       Namespace: AWS/DynamoDB
@@ -79,10 +79,10 @@ Outputs:
     Description: 'Long Term Memory DynamoDB Table Name'
     Value: !Ref LongTermMemoryTable
     Export:
-      Name: !Sub '-ltm-table-name-'
+      Name: !Sub '${ProjectName}-ltm-table-name-${Environment}'
 
   LTMTableArn:
     Description: 'Long Term Memory DynamoDB Table ARN'
     Value: !GetAtt LongTermMemoryTable.Arn
     Export:
-      Name: !Sub '-ltm-table-arn-'
+      Name: !Sub '${ProjectName}-ltm-table-arn-${Environment}'

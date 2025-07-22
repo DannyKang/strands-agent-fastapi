@@ -18,8 +18,8 @@ Resources:
   LTMProcessingQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub '-ltm-processing-queue-'
-      VisibilityTimeoutSeconds: 300  # 5분 (LTM 처리 시간 고려)
+      QueueName: !Sub '${ProjectName}-ltm-processing-queue-${Environment}'
+      VisibilityTimeout: 300  # 5분 (LTM 처리 시간 고려)
       MessageRetentionPeriod: 1209600  # 14일
       ReceiveMessageWaitTimeSeconds: 20  # Long polling 활성화
       RedrivePolicy:
@@ -37,7 +37,7 @@ Resources:
   LTMDeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub '-ltm-processing-dlq-'
+      QueueName: !Sub '${ProjectName}-ltm-processing-dlq-${Environment}'
       MessageRetentionPeriod: 1209600  # 14일
       Tags:
         - Key: Environment
@@ -51,7 +51,7 @@ Resources:
   LTMQueueDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub '-ltm-queue-depth-'
+      AlarmName: !Sub '${ProjectName}-ltm-queue-depth-${Environment}'
       AlarmDescription: 'LTM processing queue depth is high'
       MetricName: ApproximateNumberOfVisibleMessages
       Namespace: AWS/SQS
@@ -68,7 +68,7 @@ Resources:
   LTMDLQAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub '-ltm-dlq-messages-'
+      AlarmName: !Sub '${ProjectName}-ltm-dlq-messages-${Environment}'
       AlarmDescription: 'Messages in LTM DLQ detected'
       MetricName: ApproximateNumberOfVisibleMessages
       Namespace: AWS/SQS
@@ -86,7 +86,7 @@ Resources:
   LTMWorkerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '-ltm-worker-role-'
+      RoleName: !Sub '${ProjectName}-ltm-worker-role-${Environment}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -124,14 +124,15 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                 Resource: 
-                  - !Sub 'arn:aws:dynamodb:::table/langchain_chat_history'
-                  - !Sub 'arn:aws:dynamodb:::table/user_long_term_memory'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/langchain_chat_history'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ProjectName}-user-long-term-memory-${Environment}'
               # Bedrock 권한
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                 Resource: 
-                  - !Sub 'arn:aws:bedrock:::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
               # CloudWatch Logs 권한
               - Effect: Allow
                 Action:
@@ -152,28 +153,28 @@ Outputs:
     Description: 'LTM Processing Queue URL'
     Value: !Ref LTMProcessingQueue
     Export:
-      Name: !Sub '-ltm-queue-url-'
+      Name: !Sub '${ProjectName}-ltm-queue-url-${Environment}'
 
   LTMQueueArn:
     Description: 'LTM Processing Queue ARN'
     Value: !GetAtt LTMProcessingQueue.Arn
     Export:
-      Name: !Sub '-ltm-queue-arn-'
+      Name: !Sub '${ProjectName}-ltm-queue-arn-${Environment}'
 
   LTMDLQUrl:
     Description: 'LTM Dead Letter Queue URL'
     Value: !Ref LTMDeadLetterQueue
     Export:
-      Name: !Sub '-ltm-dlq-url-'
+      Name: !Sub '${ProjectName}-ltm-dlq-url-${Environment}'
 
   LTMWorkerRoleArn:
     Description: 'LTM Worker IAM Role ARN'
     Value: !GetAtt LTMWorkerRole.Arn
     Export:
-      Name: !Sub '-ltm-worker-role-arn-'
+      Name: !Sub '${ProjectName}-ltm-worker-role-arn-${Environment}'
 
   LTMWorkerInstanceProfileArn:
     Description: 'LTM Worker Instance Profile ARN'
     Value: !GetAtt LTMWorkerInstanceProfile.Arn
     Export:
-      Name: !Sub '-ltm-worker-instance-profile-arn-'
+      Name: !Sub '${ProjectName}-ltm-worker-instance-profile-arn-${Environment}'
