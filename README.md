@@ -1,54 +1,25 @@
-# Strands Agent Session Manager (Version 1.0.1)
+# Strands Agent Session Manager with Long Term Memory
 
-AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관리 시스템입니다. 최신 Strands Agent SDK의 모든 기능을 활용하여 Redis 기반 세션 저장과 DynamoDB 기반 대화 히스토리 저장을 지원하며, 확장 가능한 마이크로서비스 아키텍처로 설계되었습니다.
+AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관리 시스템입니다. Redis 기반 세션 저장, DynamoDB 기반 대화 히스토리 저장, 그리고 **Long Term Memory (LTM)** 기능을 통한 사용자 개인화를 지원합니다.
 
-## 🆕 Version 1.0.1 주요 업데이트
-
-### 새로운 기능
-- **향상된 Agent 초기화**: 더 간단하고 직관적인 에이전트 생성 방식
-- **개선된 도구 통합**: MCP (Model Context Protocol) 지원 강화
-- **더 나은 스트리밍**: 실시간 응답 스트리밍 성능 개선
-- **향상된 에러 핸들링**: 더 robust한 오류 처리 및 복구 메커니즘
-- **개선된 관찰성**: 더 나은 로깅 및 트레이싱 기능
-- **메모리 관리 개선**: 더 효율적인 컨텍스트 및 메모리 관리
-
-### API 변경사항
-- Agent 생성 방식 개선
-- 새로운 설정 옵션 추가
-- 도구 등록 방식 간소화
-- 스트리밍 API 개선
-
-## 🧬 AWS Strands Agent SDK 1.0.1
-
-이 프로젝트는 **AWS Strands Agent SDK 1.0.1**의 완전한 데모 애플리케이션입니다:
-
-- **Model-driven approach**: 복잡한 워크플로우 대신 모델의 추론 능력 활용
-- **Multi-provider support**: Bedrock, Anthropic, OpenAI 등 다양한 모델 제공자 지원
-- **Enhanced tool integration**: MCP 지원으로 더 강력한 도구 통합
-- **Production-ready**: 실제 AWS 팀들이 프로덕션에서 사용하는 SDK
-- **Improved observability**: 향상된 로깅, 트레이싱, 모니터링
-
-## 🚀 주요 기능
+## 🆕 주요 기능
 
 ### 핵심 기능
 - **Multi-turn 대화**: 컨텍스트를 유지하는 연속 대화 지원
 - **세션 관리**: Redis 기반 고성능 세션 저장
 - **대화 히스토리**: LangChain + DynamoDB 기반 영구 대화 기록 저장
+- **Long Term Memory**: 사용자 선호도 자동 분석 및 개인화 (🆕)
 - **다중 에이전트**: 일반 어시스턴트, 고객 지원, 데이터 분석 전문가
 - **웹 인터페이스**: 브라우저에서 바로 테스트 가능한 모던 채팅 UI
-- **도구 통합**: 웹 검색, 계산기, 시간 조회 등 실용적 도구들
-- **스트리밍 응답**: 실시간 응답 스트리밍 지원 (1.0.1 개선)
+- **비동기 처리**: SQS 기반 백그라운드 LTM 처리
 
-### 기술적 특징 (1.0.1)
-- **Stateless 설계**: EKS Pod 스케일링 지원 (3-100 pods)
-- **고가용성**: Redis 장애 시 메모리 기반 fallback
-- **확장성**: 수천 명의 동시 사용자 지원
-- **RESTful API**: 표준 HTTP API 제공
-- **최신 SDK**: Strands Agent SDK 1.0.1 최신 기능 완전 활용
-- **향상된 관찰성**: 개선된 로깅 및 트레이싱
-- **MCP 지원**: Model Context Protocol 통합
+### 🧠 Long Term Memory (LTM) 기능
+- **자동 선호도 추출**: 대화 종료 시 AI가 사용자 선호도를 자동 분석
+- **개인화된 응답**: 사용자 히스토리 기반 맞춤형 AI 응답
+- **지속적 학습**: 새로운 대화마다 기존 LTM과 병합하여 지속적 개선
+- **비동기 처리**: 메인 애플리케이션 성능에 영향 없는 백그라운드 처리
 
-## 🏗️ 아키텍처
+## 🏗️ 시스템 아키텍처
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -71,14 +42,22 @@ AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관
                  │            │            │
         ┌────────▼──────┐    │    ┌───────▼────────┐
         │ Redis Cluster │    │    │   DynamoDB     │
-        │  (Sessions)   │    │    │ (LangChain)    │
+        │  (Sessions)   │    │    │ (Chat History) │
         └───────────────┘    │    └────────────────┘
                              │
                     ┌────────▼────────┐
-                    │ AWS Strands     │
-                    │ Agent SDK 1.0.1 │
-                    │ + Bedrock       │
-                    │ + MCP Support   │
+                    │   SQS Queue     │
+                    │ (LTM Processing)│
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   LTM Worker    │
+                    │ (Background)    │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   DynamoDB      │
+                    │ (LTM Storage)   │
                     └─────────────────┘
 ```
 
@@ -89,22 +68,16 @@ AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관
 - **Python 3.10+**: 최신 Python 기능 활용
 - **AWS Strands Agent SDK 1.0.1**: 최신 AI 에이전트 프레임워크
 
-### Storage
+### Storage & Queue
 - **Redis**: 고성능 세션 저장소 (primary)
+- **DynamoDB**: 대화 히스토리 및 LTM 저장
+- **SQS**: LTM 처리를 위한 메시지 큐
 - **Memory**: 세션 저장소 fallback
-- **DynamoDB**: LangChain 표준 대화 히스토리 저장
 
 ### AI & Models
 - **AWS Bedrock**: Claude 3.5 Sonnet (기본)
 - **Anthropic API**: 직접 API 연결 (선택적)
 - **OpenAI API**: GPT-4 연결 (선택적)
-
-### Tools & Integrations (1.0.1)
-- **WebSearchTool**: 실시간 웹 검색
-- **CalculatorTool**: 수학적 계산
-- **TimeTool**: 시간 조회
-- **Custom Tools**: 세션 정보, 데이터 분석 등
-- **MCP Tools**: Model Context Protocol 지원 도구
 
 ## 📦 설치 및 실행
 
@@ -114,25 +87,28 @@ AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관
 # Python 가상환경 생성
 python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
-# venv\\Scripts\\activate  # Windows
 
-# 의존성 설치 (Strands Agent SDK 1.0.1 포함)
+# 의존성 설치
 pip install -r requirements.txt
 ```
 
-### 2. 환경 변수 설정
+### 2. AWS 인프라 배포
+
+```bash
+# LTM 인프라 배포 (SQS, DynamoDB, IAM)
+./deploy-ltm-infrastructure.sh dev strands-agent ap-northeast-2
+```
+
+### 3. 환경 변수 설정
 
 ```bash
 # .env 파일 생성
 cp .env.example .env
-
-# .env 파일 편집
-nano .env
 ```
 
 필수 환경 변수:
 ```env
-# AWS 설정 (Bedrock 사용 시)
+# AWS 설정
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=ap-northeast-2
@@ -145,37 +121,35 @@ STRANDS_REGION=ap-northeast-2
 # Redis 설정
 REDIS_URL=redis://localhost:6379
 
-# 1.0.1 새로운 설정
-STRANDS_MAX_ITERATIONS=10
-STRANDS_ENABLE_TRACING=true
-STRANDS_MEMORY_ENABLED=true
+# DynamoDB 설정
+DYNAMODB_HISTORY_TABLE=langchain_chat_history
+USE_LANGCHAIN_HISTORY=true
+
+# Long Term Memory 설정
+LTM_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/ACCOUNT_ID/strands-agent-ltm-processing-queue-dev
+LTM_TABLE_NAME=strands-agent-user-long-term-memory-dev
+LTM_BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+LTM_WORKER_ENABLED=true
 ```
 
-### 3. Redis 실행
+### 4. Redis 실행
 
 ```bash
 # Docker로 Redis 실행
 docker run -d -p 6379:6379 --name redis redis:alpine
-
-# 또는 로컬 Redis 설치
-# Ubuntu: sudo apt install redis-server
-# macOS: brew install redis
 ```
 
-### 4. 서버 실행
+### 5. 서버 실행
 
 ```bash
-# process kill
-lsof -ti:8000 | xargs kill -9
-
-# 개발 모드
+# 메인 FastAPI 서버 실행
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# 또는 스크립트 사용
-./run.sh
+# 별도 터미널에서 LTM Worker 실행
+python ltm_worker.py
 ```
 
-### 5. 접속 및 테스트
+### 6. 접속 및 테스트
 
 - **웹 인터페이스**: http://localhost:8000
 - **API 문서**: http://localhost:8000/docs
@@ -189,73 +163,155 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 2. 사용자 ID 입력 (예: user123)
 3. 에이전트 선택 (assistant-001, support-001, analyst-001)
 4. 대화 시작!
+5. 대화 종료 시 자동으로 LTM 처리 시작
 
 ### API 사용 예시
 
+#### 기본 세션 관리
 ```bash
 # 세션 생성
-curl -X POST \"http://localhost:8000/sessions\" \\
-  -H \"Content-Type: application/json\" \\
+curl -X POST "http://localhost:8000/sessions" \
+  -H "Content-Type: application/json" \
   -d '{
-    \"user_id\": \"user123\",
-    \"agent_id\": \"assistant-001\"
+    "user_id": "user123",
+    "agent_id": "assistant-001"
   }'
 
 # 메시지 전송
-curl -X POST \"http://localhost:8000/sessions/{session_id}/messages\" \\
-  -H \"Content-Type: application/json\" \\
+curl -X POST "http://localhost:8000/sessions/{session_id}/messages" \
+  -H "Content-Type: application/json" \
   -d '{
-    \"message\": \"안녕하세요! 오늘 날씨는 어떤가요?\"
+    "message": "안녕하세요! 오늘 날씨는 어떤가요?"
   }'
 
-# 대화 히스토리 조회
-curl \"http://localhost:8000/sessions/{session_id}/history\"
+# 세션 종료 (LTM 처리 자동 시작)
+curl -X DELETE "http://localhost:8000/sessions/{session_id}"
 ```
 
-## 🤖 에이전트 타입 (1.0.1 개선)
+#### Long Term Memory API
+```bash
+# 사용자 LTM 조회
+curl "http://localhost:8000/users/user123/ltm"
+
+# 사용자 선호도 조회
+curl "http://localhost:8000/users/user123/preferences"
+
+# LTM 통계 조회
+curl "http://localhost:8000/admin/ltm/stats"
+```
+
+## 🤖 에이전트 타입
 
 ### 1. General Assistant (assistant-001)
 - **역할**: 범용 AI 어시스턴트
 - **기능**: 일반적인 질문 답변, 웹 검색, 계산
 - **도구**: WebSearch, Calculator, Time, Session Info
-- **1.0.1 개선**: 향상된 컨텍스트 이해, 더 나은 도구 통합
 
 ### 2. Customer Support (support-001)
 - **역할**: 고객 지원 전문가
 - **기능**: 문제 해결, 단계별 가이드
 - **도구**: WebSearch, Time, Session Info
-- **1.0.1 개선**: 더 정확한 문제 진단, 개선된 해결책 제시
 
 ### 3. Data Analyst (analyst-001)
 - **역할**: 데이터 분석 전문가
 - **기능**: 데이터 분석, 수치 계산, 트렌드 분석
 - **도구**: Calculator, Analyze Data, Time, Session Info
-- **1.0.1 개선**: 향상된 데이터 처리, 더 정확한 분석
+
+## 🧠 Long Term Memory 상세
+
+### 추출되는 정보
+```json
+{
+  "interests": ["AI", "Technology", "Data Science"],
+  "preferences": {
+    "communication_style": "professional",
+    "topics_of_interest": ["Machine Learning", "Cloud Computing"],
+    "problem_solving_approach": "step-by-step"
+  },
+  "behavioral_patterns": {
+    "question_types": ["technical", "how-to"],
+    "interaction_frequency": "daily",
+    "session_duration_preference": "medium"
+  },
+  "context_clues": {
+    "mentioned_tools": ["calculator", "web_search"],
+    "domain_expertise": "software_development",
+    "language_preference": "korean"
+  },
+  "agent_interaction": {
+    "preferred_agent_type": "assistant-001",
+    "satisfaction_indicators": ["detailed_explanations"],
+    "improvement_suggestions": ["more_examples"]
+  }
+}
+```
+
+### LTM 처리 플로우
+1. **대화 종료**: 사용자가 세션 종료
+2. **큐 전송**: SQS에 LTM 처리 메시지 전송
+3. **백그라운드 처리**: LTM Worker가 메시지 수신
+4. **히스토리 분석**: DynamoDB에서 대화 히스토리 조회
+5. **AI 분석**: Bedrock Claude로 선호도 추출
+6. **LTM 업데이트**: 기존 LTM과 병합하여 저장
 
 ## 🔧 API 엔드포인트
 
 ### 세션 관리
 - `POST /sessions` - 세션 생성
 - `GET /sessions/{session_id}` - 세션 조회
-- `DELETE /sessions/{session_id}` - 세션 삭제
+- `DELETE /sessions/{session_id}` - 세션 종료 (LTM 처리 시작)
 - `GET /users/{user_id}/sessions` - 사용자 세션 목록
 
 ### 메시지 처리
 - `POST /sessions/{session_id}/messages` - 메시지 전송
-- `POST /sessions/{session_id}/stream` - 스트리밍 메시지 (1.0.1 신규)
 - `GET /sessions/{session_id}/history` - 대화 히스토리 조회
 
-### 에이전트 관리
-- `GET /agents` - 에이전트 목록
-- `GET /agents/{agent_id}` - 에이전트 정보
-- `GET /agents/capabilities` - 에이전트 기능 정보
+### Long Term Memory
+- `GET /users/{user_id}/ltm` - 사용자 LTM 조회
+- `GET /users/{user_id}/preferences` - 사용자 선호도 조회
+- `PUT /users/{user_id}/ltm` - LTM 수동 업데이트 (관리자용)
+- `DELETE /users/{user_id}/ltm` - LTM 삭제
 
 ### 시스템 관리
 - `GET /health` - 시스템 상태 확인
 - `GET /admin/stats` - 시스템 통계
+- `GET /admin/ltm/stats` - LTM 통계
 - `POST /admin/cleanup` - 만료된 세션 정리
 
-## 🔍 모니터링 및 로깅 (1.0.1 개선)
+## 🚀 배포
+
+### Docker 배포
+
+#### 메인 애플리케이션
+```bash
+docker build -t strands-agent-api:latest .
+docker run -d -p 8000:8000 \
+  -e AWS_ACCESS_KEY_ID=your-key \
+  -e AWS_SECRET_ACCESS_KEY=your-secret \
+  -e REDIS_URL=redis://redis:6379 \
+  -e LTM_QUEUE_URL=your-queue-url \
+  strands-agent-api:latest
+```
+
+#### LTM Worker
+```bash
+docker build -f Dockerfile.ltm-worker -t ltm-worker:latest .
+docker run -d \
+  -e AWS_REGION=ap-northeast-2 \
+  -e LTM_QUEUE_URL=your-queue-url \
+  -e LTM_TABLE_NAME=your-table-name \
+  -e LTM_BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0 \
+  ltm-worker:latest
+```
+
+### Kubernetes 배포
+
+```bash
+# ConfigMap과 ServiceAccount 설정 후
+kubectl apply -f k8s/ltm-worker-deployment.yaml
+```
+
+## 🔍 모니터링
 
 ### 헬스 체크
 ```bash
@@ -265,173 +321,63 @@ curl http://localhost:8000/health
 응답 예시:
 ```json
 {
-  \"status\": \"healthy\",
-  \"storage\": \"redis\",
-  \"strands_agent\": \"healthy\",
-  \"strands_version\": \"1.0.1\",
-  \"timestamp\": \"2025-07-22T04:00:00Z\",
-  \"strands_details\": {
-    \"overall_status\": \"healthy\",
-    \"components\": {
-      \"strands_sdk\": {\"status\": \"available\", \"version\": \"1.0.1\"},
-      \"strands_tools\": {\"status\": \"available\"},
-      \"model_providers\": {
-        \"bedrock\": {\"status\": \"available\"}
-      },
-      \"mcp_support\": {\"status\": \"enabled\"}
-    }
-  }
+  "status": "healthy",
+  "storage": "redis",
+  "strands_agent": "healthy",
+  "strands_version": "1.0.1",
+  "ltm_enabled": true,
+  "timestamp": "2025-07-22T05:00:00Z"
 }
 ```
 
-## 🚀 배포
-
-### Docker 배포
-
+### LTM 통계
 ```bash
-# Docker 이미지 빌드
-docker build -t strands-agent-api:1.0.1 .
-
-# 컨테이너 실행
-docker run -d -p 8000:8000 \\
-  -e AWS_ACCESS_KEY_ID=your-key \\
-  -e AWS_SECRET_ACCESS_KEY=your-secret \\
-  -e REDIS_URL=redis://redis:6379 \\
-  strands-agent-api:1.0.1
-```
-
-### Kubernetes 배포
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: strands-agent-api
-  labels:
-    app: strands-agent-api
-    version: \"1.0.1\"
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: strands-agent-api
-  template:
-    metadata:
-      labels:
-        app: strands-agent-api
-        version: \"1.0.1\"
-    spec:
-      containers:
-      - name: api
-        image: strands-agent-api:1.0.1
-        ports:
-        - containerPort: 8000
-        env:
-        - name: REDIS_URL
-          value: \"redis://redis-service:6379\"
-        - name: AWS_REGION
-          value: \"ap-northeast-2\"
-        - name: STRANDS_ENABLE_TRACING
-          value: \"true\"
-        resources:
-          requests:
-            memory: \"256Mi\"
-            cpu: \"250m\"
-          limits:
-            memory: \"512Mi\"
-            cpu: \"500m\"
-```
-
-## 🔧 개발 가이드 (1.0.1)
-
-### 새로운 에이전트 추가
-
-1. `strands_client.py`에서 시스템 프롬프트 추가:
-```python
-def _get_system_prompt(self, agent_id: str) -> str:
-    prompts = {
-        \"your-agent-001\": \"\"\"
-        당신의 새로운 에이전트 프롬프트...
-        \"\"\"
-    }
-```
-
-2. `main.py`에서 에이전트 정보 추가:
-```python
-async def get_agent_info(agent_id: str):
-    agent_configs = {
-        \"your-agent-001\": {
-            \"id\": \"your-agent-001\",
-            \"name\": \"Your Agent\",
-            \"description\": \"설명...\"
-        }
-    }
-```
-
-### 새로운 도구 추가 (1.0.1 방식)
-
-```python
-from strands.tools import FunctionTool
-
-def your_custom_tool(param: str) -> str:
-    \"\"\"Your custom tool description\"\"\"
-    # 도구 로직 구현
-    return result
-
-# 1.0.1 방식으로 도구 등록
-custom_tool = FunctionTool(
-    name=\"your_custom_tool\",
-    description=\"도구 설명\",
-    function=your_custom_tool
-)
+curl http://localhost:8000/admin/ltm/stats
 ```
 
 ## 🐛 문제 해결
 
 ### 일반적인 문제들
 
-1. **Strands SDK 1.0.1 설치 오류**
+1. **LTM Worker가 메시지를 처리하지 않음**
 ```bash
-pip install --upgrade strands-agents==1.0.1 strands-agents-tools>=1.0.0
+# 큐 상태 확인
+aws sqs get-queue-attributes --queue-url $LTM_QUEUE_URL --attribute-names All
+
+# Worker 로그 확인
+docker logs ltm-worker
 ```
 
-2. **Redis 연결 실패**
+2. **Bedrock 접근 오류**
 ```bash
-# Redis 상태 확인
-redis-cli ping
-
-# Docker Redis 재시작
-docker restart redis
-```
-
-3. **AWS 자격 증명 오류**
-```bash
-# AWS CLI 설정 확인
-aws configure list
+# Bedrock 모델 접근 권한 확인
+aws bedrock list-foundation-models --region ap-northeast-2
 
 # 환경 변수 확인
-echo $AWS_ACCESS_KEY_ID
+echo $LTM_BEDROCK_MODEL_ID
 ```
 
-4. **1.0.1 호환성 문제**
-- 기존 0.x 버전과 API 변경사항 확인
-- 새로운 설정 옵션 적용
-- 도구 등록 방식 업데이트
-
-### 로그 확인
-
+3. **DynamoDB 접근 오류**
 ```bash
-# 애플리케이션 로그
-tail -f server.log
-
-# Docker 로그
-docker logs strands-agent-api
+# 테이블 상태 확인
+aws dynamodb describe-table --table-name $LTM_TABLE_NAME
 ```
+
+## 🔧 개발 가이드
+
+### 새로운 에이전트 추가
+
+1. `strands_client.py`에서 시스템 프롬프트 추가
+2. `main.py`에서 에이전트 정보 추가
+3. LTM 분석 로직에 새 에이전트 타입 추가
+
+### LTM 분석 로직 커스터마이징
+
+`ltm_worker.py`의 `extract_user_preferences` 메서드를 수정하여 새로운 분석 요소를 추가할 수 있습니다.
 
 ## 📚 참고 자료
 
 - [AWS Strands Agent SDK 1.0.1 문서](https://strandsagents.com/latest/)
-- [Strands Agent Tools](https://github.com/strands-agents/tools)
 - [AWS Bedrock 문서](https://docs.aws.amazon.com/bedrock/)
 - [LangChain 문서](https://python.langchain.com/)
 - [FastAPI 문서](https://fastapi.tiangolo.com/)
@@ -439,22 +385,15 @@ docker logs strands-agent-api
 ## 🤝 기여하기
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/strands-1.0.1-feature`)
-3. Commit your changes (`git commit -m 'Add Strands 1.0.1 feature'`)
-4. Push to the branch (`git push origin feature/strands-1.0.1-feature`)
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
 ## 📄 라이선스
 
-이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
-
-## 🙏 감사의 말
-
-- AWS Strands Agent 팀의 훌륭한 SDK 1.0.1
-- FastAPI 커뮤니티
-- LangChain 프로젝트
-- 모든 오픈소스 기여자들
+이 프로젝트는 MIT 라이선스 하에 배포됩니다.
 
 ---
 
-**Made with ❤️ using AWS Strands Agent SDK 1.0.1**
+**Made with ❤️ using AWS Strands Agent SDK 1.0.1 + Long Term Memory**

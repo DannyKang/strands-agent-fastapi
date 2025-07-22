@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Long Term Memory DynamoDB Table for Strands Agent'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: strands-agent
+    Description: Project name for resource naming
+
+Resources:
+  # Long Term Memory Table
+  LongTermMemoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '-user-long-term-memory-'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Component
+          Value: LTM-Storage
+
+  # CloudWatch Alarms for DynamoDB
+  LTMTableReadThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '-ltm-table-read-throttle-'
+      AlarmDescription: 'LTM table read throttling detected'
+      MetricName: ReadThrottledEvents
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref LongTermMemoryTable
+      TreatMissingData: notBreaching
+
+  LTMTableWriteThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '-ltm-table-write-throttle-'
+      AlarmDescription: 'LTM table write throttling detected'
+      MetricName: WriteThrottledEvents
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref LongTermMemoryTable
+      TreatMissingData: notBreaching
+
+Outputs:
+  LTMTableName:
+    Description: 'Long Term Memory DynamoDB Table Name'
+    Value: !Ref LongTermMemoryTable
+    Export:
+      Name: !Sub '-ltm-table-name-'
+
+  LTMTableArn:
+    Description: 'Long Term Memory DynamoDB Table ARN'
+    Value: !GetAtt LongTermMemoryTable.Arn
+    Export:
+      Name: !Sub '-ltm-table-arn-'

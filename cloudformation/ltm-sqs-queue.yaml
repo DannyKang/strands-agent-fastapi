@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Long Term Memory Processing SQS Queue for Strands Agent'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  ProjectName:
+    Type: String
+    Default: strands-agent
+    Description: Project name for resource naming
+
+Resources:
+  # Main LTM Processing Queue
+  LTMProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '-ltm-processing-queue-'
+      VisibilityTimeoutSeconds: 300  # 5분 (LTM 처리 시간 고려)
+      MessageRetentionPeriod: 1209600  # 14일
+      ReceiveMessageWaitTimeSeconds: 20  # Long polling 활성화
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LTMDeadLetterQueue.Arn
+        maxReceiveCount: 3  # 3번 재시도 후 DLQ로 이동
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Component
+          Value: LTM-Processing
+
+  # Dead Letter Queue
+  LTMDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '-ltm-processing-dlq-'
+      MessageRetentionPeriod: 1209600  # 14일
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Component
+          Value: LTM-DLQ
+
+  # CloudWatch Alarms
+  LTMQueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '-ltm-queue-depth-'
+      AlarmDescription: 'LTM processing queue depth is high'
+      MetricName: ApproximateNumberOfVisibleMessages
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt LTMProcessingQueue.QueueName
+      TreatMissingData: notBreaching
+
+  LTMDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '-ltm-dlq-messages-'
+      AlarmDescription: 'Messages in LTM DLQ detected'
+      MetricName: ApproximateNumberOfVisibleMessages
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt LTMDeadLetterQueue.QueueName
+      TreatMissingData: notBreaching
+
+  # IAM Role for LTM Worker
+  LTMWorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '-ltm-worker-role-'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: LTMWorkerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # SQS 권한
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: 
+                  - !GetAtt LTMProcessingQueue.Arn
+                  - !GetAtt LTMDeadLetterQueue.Arn
+              # DynamoDB 권한
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: 
+                  - !Sub 'arn:aws:dynamodb:::table/langchain_chat_history'
+                  - !Sub 'arn:aws:dynamodb:::table/user_long_term_memory'
+              # Bedrock 권한
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: 
+                  - !Sub 'arn:aws:bedrock:::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0'
+              # CloudWatch Logs 권한
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Instance Profile for EC2
+  LTMWorkerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref LTMWorkerRole
+
+Outputs:
+  LTMQueueUrl:
+    Description: 'LTM Processing Queue URL'
+    Value: !Ref LTMProcessingQueue
+    Export:
+      Name: !Sub '-ltm-queue-url-'
+
+  LTMQueueArn:
+    Description: 'LTM Processing Queue ARN'
+    Value: !GetAtt LTMProcessingQueue.Arn
+    Export:
+      Name: !Sub '-ltm-queue-arn-'
+
+  LTMDLQUrl:
+    Description: 'LTM Dead Letter Queue URL'
+    Value: !Ref LTMDeadLetterQueue
+    Export:
+      Name: !Sub '-ltm-dlq-url-'
+
+  LTMWorkerRoleArn:
+    Description: 'LTM Worker IAM Role ARN'
+    Value: !GetAtt LTMWorkerRole.Arn
+    Export:
+      Name: !Sub '-ltm-worker-role-arn-'
+
+  LTMWorkerInstanceProfileArn:
+    Description: 'LTM Worker Instance Profile ARN'
+    Value: !GetAtt LTMWorkerInstanceProfile.Arn
+    Export:
+      Name: !Sub '-ltm-worker-instance-profile-arn-'

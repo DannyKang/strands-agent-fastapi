@@ -19,7 +19,6 @@ from memory_session_manager import MemorySessionManager
 from strands_client import StrandsAgentClient
 from dynamodb_history_manager import DynamoDBHistoryManager
 from langchain_history_manager import LangChainHistoryManager
-from ltm_manager import LongTermMemoryManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -61,7 +60,6 @@ def convert_datetime_to_str(obj: Any) -> Any:
 session_manager: Optional[SessionManager] = None
 strands_client: Optional[StrandsAgentClient] = None
 history_manager: Optional[DynamoDBHistoryManager] = None
-ltm_manager: Optional[LongTermMemoryManager] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
