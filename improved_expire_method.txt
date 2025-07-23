@@ -1,0 +1,69 @@
+    
+    async def expire_old_sessions_with_ltm(self, ltm_manager=None, max_age_hours: int = 24, 
+                                         max_duration_hours: int = 168) -> Dict[str, int]:
+        """
+        개선된 세션 만료 처리 (LTM 포함)
+        
+        Args:
+            ltm_manager: LTM 관리자 인스턴스
+            max_age_hours: 최대 비활성 시간 (기본 24시간)
+            max_duration_hours: 최대 세션 지속 시간 (기본 7일)
+            
+        Returns:
+            만료 처리 결과 통계
+        """
+        now = datetime.utcnow()
+        inactivity_cutoff = now - timedelta(hours=max_age_hours)
+        duration_cutoff = now - timedelta(hours=max_duration_hours)
+        
+        stats = {
+            'expired_by_inactivity': 0,
+            'expired_by_duration': 0,
+            'expired_by_corruption': 0,
+            'total_expired': 0
+        }
+        
+        # 모든 세션 키 조회
+        session_keys = self.redis_client.keys(f"{self.session_prefix}*")
+        
+        for session_key in session_keys:
+            session_data = self.redis_client.get(session_key)
+            if not session_data:
+                continue
+                
+            try:
+                session_dict = json.loads(session_data)
+                session_id = session_key.replace(self.session_prefix, '')
+                
+                # 세션 시간 정보 파싱
+                last_activity = datetime.fromisoformat(session_dict.get('last_activity', ''))
+                created_at = datetime.fromisoformat(session_dict.get('created_at', ''))
+                
+                # 만료 조건 확인
+                reason = None
+                if last_activity < inactivity_cutoff:
+                    reason = 'expired'
+                    stats['expired_by_inactivity'] += 1
+                elif created_at < duration_cutoff:
+                    reason = 'timeout'
+                    stats['expired_by_duration'] += 1
+                
+                # 세션 종료 처리
+                if reason:
+                    success = await self.end_session_with_ltm(
+                        session_id=session_id,
+                        ltm_manager=ltm_manager,
+                        reason=reason
+                    )
+                    if success:
+                        stats['total_expired'] += 1
+                        
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                # 손상된 데이터 처리
+                logger.warning(f"Corrupted session data in {session_key}: {e}")
+                self.redis_client.delete(session_key)
+                stats['expired_by_corruption'] += 1
+                stats['total_expired'] += 1
+        
+        logger.info(f"Session cleanup completed: {stats}")
+        return stats

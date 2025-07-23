@@ -1,0 +1,38 @@
+
+async def cleanup_all_active_sessions():
+    """시스템 종료 시 모든 활성 세션 정리"""
+    if not session_manager:
+        return
+        
+    try:
+        # 모든 활성 세션 조회
+        session_keys = session_manager.redis_client.keys(f"{session_manager.session_prefix}*")
+        active_sessions = []
+        
+        for session_key in session_keys:
+            session_data = session_manager.redis_client.get(session_key)
+            if session_data:
+                try:
+                    session_dict = json.loads(session_data)
+                    if session_dict.get('status') == 'active':
+                        session_id = session_key.replace(session_manager.session_prefix, '')
+                        active_sessions.append(session_id)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        
+        # 모든 활성 세션 종료
+        terminated_count = 0
+        for session_id in active_sessions:
+            success = await session_manager.end_session_with_ltm(
+                session_id=session_id,
+                ltm_manager=ltm_manager,
+                reason="system_shutdown"
+            )
+            if success:
+                terminated_count += 1
+        
+        logger.info(f"System shutdown: terminated {terminated_count} active sessions")
+        
+    except Exception as e:
+        logger.error(f"Error during system shutdown session cleanup: {e}")
+

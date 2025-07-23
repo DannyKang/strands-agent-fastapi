@@ -1,0 +1,80 @@
+    
+    async def end_session_with_ltm(self, session_id: str, ltm_manager=None, reason: str = "manual") -> bool:
+        """
+        세션 종료 및 LTM 처리
+        
+        Args:
+            session_id: 세션 ID
+            ltm_manager: LTM 관리자 인스턴스
+            reason: 종료 이유 (manual, expired, timeout, system_shutdown)
+            
+        Returns:
+            성공 여부
+        """
+        try:
+            # 세션 정보 조회
+            session = await self.get_session(session_id)
+            if not session:
+                logger.warning(f"Session {session_id} not found for termination")
+                return False
+            
+            # 세션이 이미 종료된 경우 스킵
+            if session.status == SessionStatus.EXPIRED:
+                logger.info(f"Session {session_id} already expired")
+                return True
+            
+            # 세션 상태를 EXPIRED로 변경
+            session.status = SessionStatus.EXPIRED
+            session.ended_at = datetime.utcnow()
+            session.metadata = session.metadata or {}
+            session.metadata['termination_reason'] = reason
+            session.metadata['terminated_at'] = session.ended_at.isoformat()
+            
+            # 세션 업데이트
+            await self.update_session(session)
+            
+            # LTM 처리 (메시지 수가 충분한 경우에만)
+            min_messages_for_ltm = 3  # 최소 메시지 수
+            message_count = len(session.conversation_history)
+            
+            if ltm_manager and message_count >= min_messages_for_ltm:
+                try:
+                    success = ltm_manager.queue_ltm_processing(
+                        session_id=session_id,
+                        user_id=session.user_id,
+                        agent_id=session.agent_id,
+                        message_count=message_count,
+                        metadata={
+                            **session.metadata,
+                            'termination_reason': reason,
+                            'session_duration': (session.ended_at - session.created_at).total_seconds()
+                        }
+                    )
+                    
+                    if success:
+                        logger.info(f"LTM processing queued for session {session_id} (reason: {reason})")
+                    else:
+                        logger.warning(f"Failed to queue LTM processing for session {session_id}")
+                        
+                except Exception as e:
+                    logger.error(f"Error queuing LTM processing for session {session_id}: {e}")
+            else:
+                if not ltm_manager:
+                    logger.debug(f"LTM manager not available for session {session_id}")
+                else:
+                    logger.info(f"Session {session_id} has insufficient messages ({message_count}) for LTM processing")
+            
+            # Redis에서 세션 삭제
+            session_key = self._get_session_key(session_id)
+            self.redis_client.delete(session_key)
+            
+            # 사용자 세션 목록에서 제거
+            user_sessions_key = self._get_user_sessions_key(session.user_id)
+            self.redis_client.srem(user_sessions_key, session_id)
+            
+            logger.info(f"Session {session_id} terminated successfully (reason: {reason})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to end session {session_id}: {e}")
+            return False

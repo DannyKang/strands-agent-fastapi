@@ -1,0 +1,48 @@
+
+# 자동 세션 정리 스케줄러
+import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+# 전역 스케줄러
+scheduler = None
+
+async def scheduled_session_cleanup():
+    """스케줄된 세션 정리 작업"""
+    if session_manager and ltm_manager:
+        try:
+            stats = await session_manager.expire_old_sessions_with_ltm(
+                ltm_manager=ltm_manager,
+                max_age_hours=24,  # 24시간 비활성
+                max_duration_hours=168  # 7일 최대 지속
+            )
+            logger.info(f"Scheduled session cleanup completed: {stats}")
+        except Exception as e:
+            logger.error(f"Scheduled session cleanup failed: {e}")
+
+def start_session_cleanup_scheduler():
+    """세션 정리 스케줄러 시작"""
+    global scheduler
+    if scheduler is None:
+        scheduler = AsyncIOScheduler()
+        
+        # 매 시간마다 세션 정리 실행
+        scheduler.add_job(
+            scheduled_session_cleanup,
+            trigger=IntervalTrigger(hours=1),
+            id='session_cleanup',
+            name='Automatic Session Cleanup',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        logger.info("Session cleanup scheduler started (runs every hour)")
+
+def stop_session_cleanup_scheduler():
+    """세션 정리 스케줄러 중지"""
+    global scheduler
+    if scheduler:
+        scheduler.shutdown()
+        scheduler = None
+        logger.info("Session cleanup scheduler stopped")
+
