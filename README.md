@@ -19,6 +19,16 @@ AWS Strands Agent SDK 1.0.1을 사용한 프로덕션급 대화형 AI 세션 관
 - **지속적 학습**: 새로운 대화마다 기존 LTM과 병합하여 지속적 개선
 - **비동기 처리**: 메인 애플리케이션 성능에 영향 없는 백그라운드 처리
 
+### 🔚 스마트 세션 종료 기능 (🆕)
+- **RESTful API 설계**: PATCH를 사용한 의미론적으로 올바른 세션 상태 업데이트
+- **명시적 세션 종료**: 웹 UI의 "대화 종료" 버튼으로 수동 종료
+- **자동 세션 정리**: 브라우저 종료 시 자동 세션 종료 및 LTM 처리
+- **세션 복구**: 브라우저 재시작 시 1시간 이내 세션 자동 복구
+- **다중 종료 감지**: 브라우저 종료, 탭 숨김, 포커스 잃음 등 다양한 상황 대응
+- **안전한 요청 전송**: `navigator.sendBeacon()` 사용으로 브라우저 종료 시에도 안정적 요청 전송
+- **사용자 경험 개선**: 확인 다이얼로그, 상태 메시지, 입력 필드 상태 관리
+- **관리자 기능**: 실제 세션 삭제를 위한 별도 DELETE API 제공
+
 ## 🏗️ 시스템 아키텍처
 
 ```
@@ -163,7 +173,47 @@ python ltm_worker.py
 2. 사용자 ID 입력 (예: user123)
 3. 에이전트 선택 (assistant-001, support-001, analyst-001)
 4. 대화 시작!
-5. 대화 종료 시 자동으로 LTM 처리 시작
+5. **대화 종료 방법**:
+   - **수동 종료**: "대화 종료" 버튼 클릭
+   - **자동 종료**: 브라우저 종료 시 자동 처리
+   - **세션 복구**: 브라우저 재시작 시 1시간 이내 자동 복구
+
+### 세션 종료 시나리오
+
+#### 1. 명시적 종료 (권장)
+```
+사용자가 "대화 종료" 버튼 클릭
+↓
+확인 다이얼로그 표시
+↓
+세션 종료 API 호출 (PATCH /sessions/{session_id})
+↓
+LTM 처리 큐에 메시지 전송 (SQS)
+↓
+백그라운드에서 LTM Worker가 선호도 분석
+```
+
+#### 2. 브라우저 종료 시 자동 처리
+```
+브라우저 종료 감지 (beforeunload/visibilitychange)
+↓
+navigator.sendBeacon()으로 PATCH 요청 전송
+↓
+세션 정보 로컬 스토리지에서 제거
+↓
+LTM 처리 자동 시작
+```
+
+#### 3. 세션 복구
+```
+브라우저 재시작
+↓
+로컬 스토리지에서 세션 정보 확인
+↓
+세션 유효성 검증 (1시간 이내)
+↓
+유효한 경우 대화 복구, 무효한 경우 새 세션 생성
+```
 
 ### API 사용 예시
 
@@ -184,8 +234,20 @@ curl -X POST "http://localhost:8000/sessions/{session_id}/messages" \
     "message": "안녕하세요! 오늘 날씨는 어떤가요?"
   }'
 
-# 세션 종료 (LTM 처리 자동 시작)
-curl -X DELETE "http://localhost:8000/sessions/{session_id}"
+# 세션 종료 (PATCH API 사용) - LTM 처리 자동 시작
+curl -X PATCH "http://localhost:8000/sessions/{session_id}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "ended",
+    "reason": "manual",
+    "metadata": {
+      "ended_via": "api",
+      "user_feedback": "satisfied"
+    }
+  }'
+
+# 세션 영구 삭제 (관리자용)
+curl -X DELETE "http://localhost:8000/sessions/{session_id}?force=true"
 ```
 
 #### Long Term Memory API
@@ -259,7 +321,8 @@ curl "http://localhost:8000/admin/ltm/stats"
 ### 세션 관리
 - `POST /sessions` - 세션 생성
 - `GET /sessions/{session_id}` - 세션 조회
-- `DELETE /sessions/{session_id}` - 세션 종료 (LTM 처리 시작)
+- `PATCH /sessions/{session_id}` - **세션 상태 업데이트 (종료 포함)** (🆕)
+- `DELETE /sessions/{session_id}` - 세션 영구 삭제 (관리자용, force 옵션)
 - `GET /users/{user_id}/sessions` - 사용자 세션 목록
 
 ### 메시지 처리
@@ -339,7 +402,21 @@ curl http://localhost:8000/admin/ltm/stats
 
 ### 일반적인 문제들
 
-1. **LTM Worker가 메시지를 처리하지 않음**
+1. **세션 종료가 제대로 작동하지 않음**
+```bash
+# 세션 상태 확인
+curl http://localhost:8000/sessions/{session_id}
+
+# PATCH API로 세션 종료 테스트
+curl -X PATCH "http://localhost:8000/sessions/{session_id}" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "ended", "reason": "test"}'
+
+# 브라우저 개발자 도구에서 콘솔 로그 확인
+# "Session ended successfully" 메시지 확인
+```
+
+2. **LTM Worker가 메시지를 처리하지 않음**
 ```bash
 # 큐 상태 확인
 aws sqs get-queue-attributes --queue-url $LTM_QUEUE_URL --attribute-names All
@@ -348,7 +425,27 @@ aws sqs get-queue-attributes --queue-url $LTM_QUEUE_URL --attribute-names All
 docker logs ltm-worker
 ```
 
-2. **Bedrock 접근 오류**
+3. **브라우저 종료 시 세션이 정리되지 않음**
+```javascript
+// 브라우저 개발자 도구에서 확인
+localStorage.getItem('strandsSession')
+
+// beforeunload 이벤트가 제대로 등록되었는지 확인
+// 콘솔에서 "Browser close handlers setup completed" 메시지 확인
+```
+
+4. **sendBeacon PATCH 요청이 작동하지 않음**
+```bash
+# 서버 로그에서 POST 요청 확인 (sendBeacon은 POST로 전송됨)
+tail -f app.log | grep "POST /sessions"
+
+# FormData 처리 확인
+curl -X POST "http://localhost:8000/sessions/{session_id}" \
+  -F "method=PATCH" \
+  -F 'data={"status":"ended","reason":"test"}'
+```
+
+5. **Bedrock 접근 오류**
 ```bash
 # Bedrock 모델 접근 권한 확인
 aws bedrock list-foundation-models --region ap-northeast-2
@@ -357,7 +454,7 @@ aws bedrock list-foundation-models --region ap-northeast-2
 echo $LTM_BEDROCK_MODEL_ID
 ```
 
-3. **DynamoDB 접근 오류**
+6. **DynamoDB 접근 오류**
 ```bash
 # 테이블 상태 확인
 aws dynamodb describe-table --table-name $LTM_TABLE_NAME
@@ -374,6 +471,52 @@ aws dynamodb describe-table --table-name $LTM_TABLE_NAME
 ### LTM 분석 로직 커스터마이징
 
 `ltm_worker.py`의 `extract_user_preferences` 메서드를 수정하여 새로운 분석 요소를 추가할 수 있습니다.
+
+### 세션 종료 기능 커스터마이징
+
+#### RESTful API 설계 원칙
+현재 구현은 REST API 설계 원칙을 따릅니다:
+- **PATCH**: 세션 상태 업데이트 (종료 포함)
+- **DELETE**: 실제 세션 데이터 삭제 (관리자용)
+
+#### 세션 종료 조건 수정
+`static/index.html`의 `setupBrowserCloseHandlers()` 메서드에서 세션 종료 조건을 수정할 수 있습니다:
+
+```javascript
+// 세션 복구 시간 변경 (기본: 1시간)
+const sessionAge = Date.now() - new Date(parsed.timestamp).getTime();
+if (sessionAge < 2 * 60 * 60 * 1000) { // 2시간으로 변경
+    // 세션 복구 로직
+}
+```
+
+#### PATCH API 요청 커스터마이징
+```javascript
+// 추가 메타데이터와 함께 세션 종료
+const response = await fetch(`/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        status: 'ended',
+        reason: 'custom_reason',
+        metadata: {
+            ended_via: 'custom_ui',
+            user_satisfaction: 'high',
+            session_quality: 'excellent'
+        }
+    })
+});
+```
+
+#### 추가 종료 이벤트 감지
+```javascript
+// 네트워크 연결 끊김 감지
+window.addEventListener('offline', () => {
+    if (this.sessionId) {
+        this.endSession();
+    }
+});
+```
 
 ## 📚 참고 자료
 

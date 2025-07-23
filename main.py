@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,11 +14,14 @@ from models import (
     StrandsSession, CreateSessionRequest, MessageRequest, MessageResponse,
     SessionListResponse, ErrorResponse, SessionStatus
 )
+from pydantic import BaseModel
+from typing import Optional
 from session_manager import SessionManager
 from memory_session_manager import MemorySessionManager
 from strands_client import StrandsAgentClient
 from dynamodb_history_manager import DynamoDBHistoryManager
 from langchain_history_manager import LangChainHistoryManager
+from ltm_manager import LongTermMemoryManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -33,6 +36,12 @@ def json_serializer(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+# 요청 모델들
+class SessionStatusUpdate(BaseModel):
+    status: str
+    reason: Optional[str] = "manual"
+    metadata: Optional[dict] = None
 
 def safe_json_response(data: dict, status_code: int = 200) -> JSONResponse:
     """안전한 JSON 응답 생성"""
@@ -60,11 +69,12 @@ def convert_datetime_to_str(obj: Any) -> Any:
 session_manager: Optional[SessionManager] = None
 strands_client: Optional[StrandsAgentClient] = None
 history_manager: Optional[DynamoDBHistoryManager] = None
+ltm_manager: Optional[LongTermMemoryManager] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
-    global session_manager, strands_client, history_manager
+    global session_manager, strands_client, history_manager, ltm_manager
     
     # 시작 시 초기화
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -124,6 +134,15 @@ async def lifespan(app: FastAPI):
         logger.warning(f"History manager initialization failed: {e}. History will not be saved")
         history_manager = None
     
+    # Long Term Memory 관리자 초기화
+    try:
+        ltm_manager = LongTermMemoryManager(region=region)
+        ltm_manager.create_ltm_table_if_not_exists()
+        logger.info("LTM manager initialized successfully")
+    except Exception as e:
+        logger.warning(f"LTM manager initialization failed: {e}. LTM features will be disabled")
+        ltm_manager = None
+    
     logger.info("Application started with Strands Agent integration")
     yield
     
@@ -177,6 +196,10 @@ def get_strands_client() -> StrandsAgentClient:
 def get_history_manager():
     """히스토리 관리자 의존성"""
     return history_manager
+
+def get_ltm_manager():
+    """LTM 관리자 의존성"""
+    return ltm_manager
 
 from fastapi.responses import RedirectResponse
 import json
@@ -311,16 +334,145 @@ async def get_session(
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
-@app.delete("/sessions/{session_id}")
-async def delete_session(
+@app.patch("/sessions/{session_id}")
+async def update_session_status(
     session_id: str,
+    update: SessionStatusUpdate,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    ltm_mgr = Depends(get_ltm_manager)
+):
+    """세션 상태 업데이트 (종료 포함)"""
+    
+    # 세션 존재 확인
+    session = await session_mgr.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if update.status == "ended":
+        # 이미 종료된 세션인지 확인
+        if session.status == SessionStatus.EXPIRED:
+            return {
+                "message": "Session already ended",
+                "session_id": session_id,
+                "status": "ended",
+                "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+                "ltm_processing": "already_processed"
+            }
+        
+        # LTM 처리 (메시지가 3개 이상인 경우에만)
+        message_count = len(session.conversation_history)
+        ltm_queued = False
+        
+        if ltm_mgr and message_count >= 3:
+            try:
+                # 메타데이터 준비
+                ltm_metadata = {
+                    "termination_reason": update.reason,
+                    "terminated_at": datetime.utcnow().isoformat(),
+                    "ended_via": "patch_api"
+                }
+                if update.metadata:
+                    ltm_metadata.update(update.metadata)
+                
+                ltm_queued = ltm_mgr.queue_ltm_processing(
+                    session_id=session_id,
+                    user_id=session.user_id,
+                    agent_id=session.agent_id,
+                    message_count=message_count,
+                    metadata=ltm_metadata
+                )
+                logger.info(f"LTM processing queued for session {session_id} (reason: {update.reason})")
+            except Exception as e:
+                logger.error(f"Failed to queue LTM processing for session {session_id}: {e}")
+        
+        # 세션 삭제 (기존 방식)
+        success = await session_mgr.delete_session(session_id)
+        if not success:
+            logger.warning(f"Failed to delete session {session_id}, but LTM processing was queued")
+        
+        return {
+            "message": "Session ended successfully",
+            "session_id": session_id,
+            "status": "ended",
+            "ended_at": datetime.utcnow().isoformat(),
+            "reason": update.reason,
+            "ltm_processing": "queued" if ltm_queued else "disabled",
+            "message_count": message_count,
+            "session_deleted": success
+        }
+    
+    elif update.status == "active":
+        # 세션 재활성화는 지원하지 않음 (이미 삭제된 세션은 복구 불가)
+        raise HTTPException(
+            status_code=400, 
+            detail="Session reactivation is not supported. Please create a new session."
+        )
+    
+    else:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid status '{update.status}'. Supported statuses: 'ended'"
+        )
+
+@app.delete("/sessions/{session_id}")
+async def delete_session_permanently(
+    session_id: str,
+    force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager)
 ):
-    """세션 삭제"""
+    """세션 영구 삭제 (관리자용)"""
+    
+    session = await session_mgr.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # 종료되지 않은 세션은 삭제 불가 (안전장치)
+    if session.status != SessionStatus.EXPIRED and not force:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete active session. End the session first or use force=true"
+        )
+    
     success = await session_mgr.delete_session(session_id)
     if not success:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"message": "Session deleted successfully"}
+        raise HTTPException(status_code=500, detail="Failed to delete session")
+    
+    return {
+        "message": "Session permanently deleted",
+        "session_id": session_id,
+        "deleted_at": datetime.utcnow().isoformat(),
+        "was_forced": force
+    }
+
+# sendBeacon을 위한 POST 엔드포인트 (PATCH 시뮬레이션)
+@app.post("/sessions/{session_id}")
+async def handle_beacon_session_update(
+    session_id: str,
+    request: Request,
+    method: Optional[str] = Form(None),
+    data: Optional[str] = Form(None),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    ltm_mgr = Depends(get_ltm_manager)
+):
+    """sendBeacon을 통한 세션 상태 업데이트 처리"""
+    
+    # method가 PATCH인 경우 PATCH 로직 실행
+    if method == "PATCH" and data:
+        try:
+            update_data = json.loads(data)
+            update = SessionStatusUpdate(**update_data)
+            
+            # 기존 PATCH 로직 재사용
+            return await update_session_status(session_id, update, session_mgr, ltm_mgr)
+            
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON data")
+        except Exception as e:
+            logger.error(f"Error processing beacon request: {e}")
+            raise HTTPException(status_code=400, detail="Invalid request data")
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid beacon request")
 
 # 메시지 처리 엔드포인트
 

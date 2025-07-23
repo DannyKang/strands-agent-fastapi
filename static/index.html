@@ -624,6 +624,9 @@
                         <button class="btn-secondary" id="newChatBtn">
                             <i class="fas fa-plus"></i> 새 대화
                         </button>
+                        <button class="btn-secondary" id="endSessionBtn">
+                            <i class="fas fa-stop-circle"></i> 대화 종료
+                        </button>
                         <button class="btn-secondary" id="logoutBtn">
                             <i class="fas fa-sign-out-alt"></i> 로그아웃
                         </button>
@@ -722,6 +725,7 @@
                 // 버튼들
                 this.historyBtn = document.getElementById('historyBtn');
                 this.newChatBtn = document.getElementById('newChatBtn');
+                this.endSessionBtn = document.getElementById('endSessionBtn');
                 this.logoutBtn = document.getElementById('logoutBtn');
                 
                 // 채팅 요소들 확인
@@ -796,9 +800,15 @@
                 if (this.newChatBtn) {
                     this.newChatBtn.addEventListener('click', () => this.startNewChat());
                 }
+                if (this.endSessionBtn) {
+                    this.endSessionBtn.addEventListener('click', () => this.endSession());
+                }
                 if (this.logoutBtn) {
                     this.logoutBtn.addEventListener('click', () => this.logout());
                 }
+                
+                // 브라우저 종료 시 세션 정리
+                this.setupBrowserCloseHandlers();
                 
                 console.log('Event listeners setup completed');
             }
@@ -807,6 +817,27 @@
                 try {
                     await this.checkSystemHealth();
                     this.loadUserFromStorage();
+                    
+                    // 브라우저 재시작 시 세션 복구 시도
+                    if (this.restoreSessionFromStorage()) {
+                        console.log('Session restored, attempting to reconnect...');
+                        try {
+                            // 세션이 여전히 유효한지 확인
+                            const response = await fetch(`${this.apiBase}/sessions/${this.sessionId}`);
+                            if (response.ok) {
+                                // 세션이 유효하면 채팅 화면으로 전환
+                                this.showChatScreen();
+                                this.loadChatHistory();
+                                this.addMessage('agent', '이전 대화가 복구되었습니다. 계속 대화하실 수 있습니다.');
+                            } else {
+                                // 세션이 무효하면 정리
+                                this.clearSessionFromStorage();
+                            }
+                        } catch (error) {
+                            console.error('Failed to restore session:', error);
+                            this.clearSessionFromStorage();
+                        }
+                    }
                 } catch (error) {
                     this.showLoginError('시스템 초기화 실패: ' + error.message);
                 }
@@ -1459,10 +1490,215 @@
                 try {
                     await this.createNewSession();
                     this.chatMessages.innerHTML = '';
+                    
+                    // 입력 필드 재활성화
+                    if (this.messageInput) {
+                        this.messageInput.disabled = false;
+                        this.messageInput.placeholder = '메시지를 입력하세요...';
+                    }
+                    if (this.sendBtn) {
+                        this.sendBtn.disabled = false;
+                    }
+                    
+                    // 상태 업데이트
+                    this.updateStatus('연결됨', 'success');
+                    
                     this.addMessage('agent', `새로운 대화를 시작합니다! 무엇을 도와드릴까요?`);
                 } catch (error) {
                     this.addMessage('agent', '새 대화 시작에 실패했습니다: ' + error.message);
                 }
+            }
+
+            async endSession() {
+                if (!this.sessionId) {
+                    this.addMessage('agent', '종료할 세션이 없습니다.');
+                    return;
+                }
+
+                // 사용자에게 확인 요청
+                if (!confirm('현재 대화를 종료하시겠습니까? 대화 내용은 자동으로 분석되어 개인화에 활용됩니다.')) {
+                    return;
+                }
+
+                try {
+                    console.log('Ending session:', this.sessionId);
+                    
+                    const response = await fetch(`${this.apiBase}/sessions/${this.sessionId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            status: 'ended',
+                            reason: 'manual',
+                            metadata: {
+                                ended_via: 'web_ui',
+                                user_agent: navigator.userAgent
+                            }
+                        })
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        console.log('Session ended successfully:', result);
+                        
+                        // 성공 메시지 표시
+                        this.addMessage('agent', '대화가 종료되었습니다. 대화 내용이 분석되어 향후 더 나은 서비스를 제공하는데 활용됩니다.');
+                        
+                        // 세션 ID 초기화
+                        this.sessionId = null;
+                        
+                        // 입력 비활성화
+                        if (this.messageInput) {
+                            this.messageInput.disabled = true;
+                            this.messageInput.placeholder = '대화가 종료되었습니다. 새 대화를 시작해주세요.';
+                        }
+                        if (this.sendBtn) {
+                            this.sendBtn.disabled = true;
+                        }
+                        
+                        // 상태 업데이트
+                        this.updateStatus('대화 종료됨', 'warning');
+                        
+                    } else {
+                        const errorText = await response.text();
+                        throw new Error(`세션 종료 실패 (${response.status}): ${errorText}`);
+                    }
+                    
+                } catch (error) {
+                    console.error('Failed to end session:', error);
+                    this.addMessage('agent', '세션 종료에 실패했습니다: ' + error.message);
+                }
+            }
+
+            setupBrowserCloseHandlers() {
+                // 페이지 언로드 전 세션 정리
+                window.addEventListener('beforeunload', (event) => {
+                    if (this.sessionId) {
+                        console.log('Browser closing, ending session:', this.sessionId);
+                        
+                        // 동기적으로 세션 종료 요청 (navigator.sendBeacon 사용)
+                        const sessionEndData = JSON.stringify({
+                            status: 'ended',
+                            reason: 'browser_close',
+                            metadata: {
+                                ended_via: 'browser_close',
+                                timestamp: new Date().toISOString()
+                            }
+                        });
+                        
+                        // sendBeacon을 사용하여 브라우저 종료 시에도 요청이 전송되도록 함
+                        // PATCH 요청을 위한 커스텀 헤더와 함께 전송
+                        const formData = new FormData();
+                        formData.append('method', 'PATCH');
+                        formData.append('data', sessionEndData);
+                        
+                        const success = navigator.sendBeacon(
+                            `${this.apiBase}/sessions/${this.sessionId}`,
+                            formData
+                        );
+                        
+                        if (!success) {
+                            // sendBeacon이 실패한 경우 동기 fetch 시도
+                            try {
+                                fetch(`${this.apiBase}/sessions/${this.sessionId}`, {
+                                    method: 'PATCH',
+                                    keepalive: true,
+                                    headers: {
+                                        'Content-Type': 'application/json'
+                                    },
+                                    body: sessionEndData
+                                });
+                            } catch (error) {
+                                console.error('Failed to end session on browser close:', error);
+                            }
+                        }
+                        
+                        // 로컬 스토리지에서 세션 정보 제거
+                        this.clearSessionFromStorage();
+                    }
+                });
+
+                // 페이지 숨김 시에도 세션 정리 (모바일 브라우저 대응)
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'hidden' && this.sessionId) {
+                        console.log('Page hidden, ending session:', this.sessionId);
+                        
+                        const sessionEndData = JSON.stringify({
+                            status: 'ended',
+                            reason: 'page_hidden',
+                            metadata: {
+                                ended_via: 'page_hidden',
+                                timestamp: new Date().toISOString()
+                            }
+                        });
+                        
+                        // FormData를 사용하여 PATCH 요청 시뮬레이션
+                        const formData = new FormData();
+                        formData.append('method', 'PATCH');
+                        formData.append('data', sessionEndData);
+                        
+                        navigator.sendBeacon(
+                            `${this.apiBase}/sessions/${this.sessionId}`,
+                            formData
+                        );
+                        
+                        this.clearSessionFromStorage();
+                    }
+                });
+
+                // 탭 포커스 잃을 때 (추가 안전장치)
+                window.addEventListener('blur', () => {
+                    if (this.sessionId) {
+                        // 세션 정보를 로컬 스토리지에 저장 (복구용)
+                        this.saveSessionToStorage();
+                    }
+                });
+
+                console.log('Browser close handlers setup completed');
+            }
+
+            saveSessionToStorage() {
+                if (this.sessionId && this.userId) {
+                    const sessionData = {
+                        sessionId: this.sessionId,
+                        userId: this.userId,
+                        currentAgent: this.currentAgent,
+                        timestamp: new Date().toISOString()
+                    };
+                    localStorage.setItem('strandsSession', JSON.stringify(sessionData));
+                }
+            }
+
+            clearSessionFromStorage() {
+                localStorage.removeItem('strandsSession');
+                this.sessionId = null;
+            }
+
+            restoreSessionFromStorage() {
+                try {
+                    const sessionData = localStorage.getItem('strandsSession');
+                    if (sessionData) {
+                        const parsed = JSON.parse(sessionData);
+                        const sessionAge = Date.now() - new Date(parsed.timestamp).getTime();
+                        
+                        // 세션이 1시간 이내인 경우에만 복구
+                        if (sessionAge < 60 * 60 * 1000) {
+                            this.sessionId = parsed.sessionId;
+                            this.userId = parsed.userId;
+                            this.currentAgent = parsed.currentAgent;
+                            console.log('Session restored from storage:', this.sessionId);
+                            return true;
+                        } else {
+                            // 오래된 세션 데이터 제거
+                            this.clearSessionFromStorage();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to restore session from storage:', error);
+                    this.clearSessionFromStorage();
+                }
+                return false;
             }
 
             logout() {
