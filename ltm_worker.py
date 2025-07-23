@@ -17,6 +17,10 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
 import signal
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
 import sys
 
 # 로깅 설정

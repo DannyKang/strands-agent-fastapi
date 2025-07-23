@@ -16,10 +16,17 @@ from models import (
 )
 from session_manager import SessionManager
 from memory_session_manager import MemorySessionManager
-from strands_client import StrandsAgentClient
+try:
+    from strands_client import StrandsAgentClient
+    STRANDS_CLIENT_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"Strands client import failed: {e}")
+    STRANDS_CLIENT_AVAILABLE = False
+    class StrandsAgentClient:
+        def __init__(self, *args, **kwargs): pass
+        def health_check(self): return {"strands_available": False}
 from dynamodb_history_manager import DynamoDBHistoryManager
 from langchain_history_manager import LangChainHistoryManager
-from ltm_manager import LongTermMemoryManager
 
 # 환경 변수 로드
 load_dotenv()
@@ -61,7 +68,6 @@ def convert_datetime_to_str(obj: Any) -> Any:
 session_manager: Optional[SessionManager] = None
 strands_client: Optional[StrandsAgentClient] = None
 history_manager: Optional[DynamoDBHistoryManager] = None
-ltm_manager: Optional[LongTermMemoryManager] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -220,7 +226,7 @@ async def health_check():
         
         # Strands Agent 상태 확인 (최신 API)
         strands = get_strands_client()
-        health_result = await strands.health_check()
+        health_result = strands.health_check()
         
         return {
             "status": "healthy",

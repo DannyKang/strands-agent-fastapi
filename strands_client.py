@@ -1,19 +1,11 @@
 """
-AWS Strands Agent SDK 클라이언트 (Version 1.0.1)
+AWS Strands Agent SDK 클라이언트 (최신 버전)
 
-이 모듈은 AWS Strands Agent SDK 1.0.1의 최신 기능을 활용하여
+이 모듈은 AWS Strands Agent SDK의 최신 기능을 활용하여
 프로덕션급 AI 에이전트 시스템을 구현합니다.
 
-주요 변경사항 (1.0.1):
-- 새로운 Agent 초기화 방식
-- 향상된 도구 통합 시스템
-- 개선된 모델 제공자 지원
-- 더 나은 에러 핸들링
-- 스트리밍 응답 개선
-- MCP (Model Context Protocol) 지원 강화
-
 주요 기능:
-- 최신 Strands Agent SDK 1.0.1 API 사용
+- 최신 Strands Agent SDK API 사용
 - 다중 모델 제공자 지원 (Bedrock, Anthropic, OpenAI)
 - 고급 도구 통합 (WebSearch, Calculator, Custom Tools)
 - 컨텍스트 인식 및 메모리 관리
@@ -30,13 +22,13 @@ import json
 
 logger = logging.getLogger(__name__)
 
-# Strands Agent SDK 1.0.1 임포트
+# Strands Agent SDK 임포트
 try:
     from strands import Agent
-    from strands.models import BedrockModel, AnthropicModel, OpenAIModel
+    from strands.models import BedrockModel
     from strands.tools import FunctionTool
     STRANDS_AVAILABLE = True
-    logger.info("✅ Strands Agent SDK 1.0.1 loaded successfully")
+    logger.info("✅ Strands Agent SDK loaded successfully")
 except ImportError as e:
     STRANDS_AVAILABLE = False
     logger.warning(f"❌ Strands import failed: {e}")
@@ -52,14 +44,6 @@ except ImportError as e:
         def __init__(self, *args, **kwargs):
             pass
     
-    class AnthropicModel:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class OpenAIModel:
-        def __init__(self, *args, **kwargs):
-            pass
-    
     class FunctionTool:
         def __init__(self, name, description, function, parameters=None):
             self.name = name
@@ -67,33 +51,45 @@ except ImportError as e:
             self.function = function
             self.parameters = parameters or {}
 
-# Strands Tools 1.0.1 임포트
+# Optional tools import (실제 패키지 구조에 맞게 수정)
 try:
     from strands_tools.calculator import calculator
-    from strands_tools.web_search import web_search
-    from strands_tools.time import current_time
+    from strands_tools.http_request import http_request
     TOOLS_AVAILABLE = True
-    logger.info("✅ Strands Tools 1.0.1 loaded successfully")
+    logger.info("✅ Strands Tools loaded successfully")
 except ImportError as e:
     TOOLS_AVAILABLE = False
     logger.warning(f"⚠️ strands_tools not available: {e}")
     calculator = None
-    web_search = None
-    current_time = None
+    http_request = None
+
+# Alternative model providers (최신 지원)
+try:
+    from strands.models.anthropic import AnthropicModel
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    AnthropicModel = None
+
+try:
+    from strands.models.openai import OpenAIModel
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAIModel = None
 
 
 class StrandsAgentClient:
     """
-    최신 AWS Strands Agent SDK 1.0.1을 사용하는 프로덕션급 클라이언트
+    최신 AWS Strands Agent SDK를 사용하는 프로덕션급 클라이언트
     
-    Features (1.0.1):
-    - Enhanced model-driven approach with improved reasoning
+    Features:
+    - Model-driven approach with advanced reasoning
     - Multi-provider support (Bedrock, Anthropic, OpenAI)
-    - Advanced tool integration with MCP support
-    - Context-aware conversations with better memory
-    - Streaming and async processing improvements
-    - Production-ready error handling and recovery
-    - Better observability and tracing
+    - Built-in and custom tools integration
+    - Context-aware conversations
+    - Streaming and async processing
+    - Production-ready error handling
     """
     
     def __init__(self, 
@@ -102,41 +98,126 @@ class StrandsAgentClient:
                  region: str = "ap-northeast-2",
                  **model_kwargs):
         """
-        Strands Agent 클라이언트 초기화 (1.0.1)
+        Initialize Strands Agent Client with latest SDK
         
         Args:
-            model_provider: 모델 제공자 (bedrock, anthropic, openai)
-            model_id: 모델 ID
-            region: AWS 리전
-            **model_kwargs: 추가 모델 설정
+            model_provider: Model provider (bedrock, anthropic, openai)
+            model_id: Model identifier
+            region: AWS region for Bedrock
+            **model_kwargs: Additional model configuration
         """
-        self.model_provider = model_provider
-        self.model_id = model_id or self._get_default_model_id(model_provider)
+        self.model_provider = model_provider.lower()
         self.region = region
         self.model_kwargs = model_kwargs
         
-        # 에이전트 인스턴스 저장소
-        self.agents = {}
+        # Set default model IDs based on provider
+        if not model_id:
+            if self.model_provider == "bedrock":
+                self.model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            elif self.model_provider == "anthropic":
+                self.model_id = "claude-3-5-sonnet-20241022"
+            elif self.model_provider == "openai":
+                self.model_id = "gpt-4-turbo-preview"
+            else:
+                self.model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        else:
+            self.model_id = model_id
+        
+        self.agents = {}  # Agent instance cache
+        self.tools_cache = {}  # Tools cache
         
         if not STRANDS_AVAILABLE:
-            logger.warning("Strands SDK not available, using mock implementation")
+            logger.warning("🔄 Running in mock mode - Strands SDK not available")
             return
+            
+        # Initialize tools
+        self.default_tools = self._setup_tools()
+        logger.info(f"🛠️ Initialized {len(self.default_tools)} tools")
         
-        # 모델 초기화
-        self.model = self._initialize_model()
-        logger.info(f"Initialized Strands Agent 1.0.1 with {model_provider} provider")
+    def _setup_tools(self) -> List[Any]:
+        """Setup all available tools with correct SDK structure"""
+        tools = []
+        
+        # Built-in tools from strands_tools
+        if TOOLS_AVAILABLE:
+            try:
+                # Calculator tool (실제 함수 사용)
+                if calculator:
+                    tools.append(calculator)
+                    logger.info("✅ Added calculator tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to add calculator tool: {e}")
+                
+            try:
+                # HTTP request tool (웹 검색 대신 사용)
+                if http_request:
+                    tools.append(http_request)
+                    logger.info("✅ Added http_request tool")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to add http_request tool: {e}")
+        
+        # Custom tools
+        custom_tools = self._create_custom_tools()
+        tools.extend(custom_tools)
+        logger.info(f"✅ Added {len(custom_tools)} custom tools")
+        
+        return tools
     
-    def _get_default_model_id(self, provider: str) -> str:
-        """기본 모델 ID 반환"""
-        defaults = {
-            "bedrock": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            "anthropic": "claude-3-5-sonnet-20241022",
-            "openai": "gpt-4o"
-        }
-        return defaults.get(provider, defaults["bedrock"])
+    def _create_custom_tools(self) -> List[Any]:
+        """Create custom tools using correct Strands SDK API"""
+        tools = []
+        
+        try:
+            from strands.tools import tool
+            
+            # Current time tool
+            @tool
+            def get_current_time() -> str:
+                """Get current date and time in Korean timezone"""
+                from datetime import datetime, timezone, timedelta
+                kst = timezone(timedelta(hours=9))
+                now = datetime.now(kst)
+                return now.strftime("%Y년 %m월 %d일 %H시 %M분 %S초 (KST)")
+            
+            tools.append(get_current_time)
+            
+            # Session info tool
+            @tool
+            def get_session_info(session_id: str = "unknown") -> str:
+                """Get session information in JSON format"""
+                return json.dumps({
+                    "session_id": session_id,
+                    "status": "active",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "agent_provider": "strands"
+                }, ensure_ascii=False)
+            
+            tools.append(get_session_info)
+            
+            # System status tool
+            @tool
+            def get_system_status() -> str:
+                """Get system status information"""
+                return json.dumps({
+                    "strands_available": STRANDS_AVAILABLE,
+                    "tools_available": TOOLS_AVAILABLE,
+                    "anthropic_available": ANTHROPIC_AVAILABLE,
+                    "openai_available": OPENAI_AVAILABLE,
+                    "status": "operational",
+                    "timestamp": datetime.utcnow().isoformat()
+                }, ensure_ascii=False)
+            
+            tools.append(get_system_status)
+            
+        except ImportError as e:
+            logger.warning(f"Failed to create custom tools: {e}")
+            # Fallback: return empty list if @tool decorator not available
+            pass
+        
+        return tools
     
-    def _initialize_model(self):
-        """모델 초기화 (1.0.1 방식)"""
+    def _create_model(self) -> Union[BedrockModel, Any]:
+        """Create model instance based on provider"""
         try:
             if self.model_provider == "bedrock":
                 return BedrockModel(
@@ -144,314 +225,466 @@ class StrandsAgentClient:
                     region=self.region,
                     **self.model_kwargs
                 )
-            elif self.model_provider == "anthropic":
+            elif self.model_provider == "anthropic" and ANTHROPIC_AVAILABLE:
                 api_key = os.getenv("ANTHROPIC_API_KEY")
                 if not api_key:
                     raise ValueError("ANTHROPIC_API_KEY environment variable required")
+                
                 return AnthropicModel(
                     model_id=self.model_id,
-                    api_key=api_key,
+                    client_args={"api_key": api_key},
                     **self.model_kwargs
                 )
-            elif self.model_provider == "openai":
+            elif self.model_provider == "openai" and OPENAI_AVAILABLE:
                 api_key = os.getenv("OPENAI_API_KEY")
                 if not api_key:
                     raise ValueError("OPENAI_API_KEY environment variable required")
+                
                 return OpenAIModel(
                     model_id=self.model_id,
-                    api_key=api_key,
+                    client_args={"api_key": api_key},
                     **self.model_kwargs
                 )
             else:
-                raise ValueError(f"Unsupported model provider: {self.model_provider}")
+                raise ValueError(f"Unsupported or unavailable model provider: {self.model_provider}")
+                
         except Exception as e:
-            logger.error(f"Failed to initialize model: {e}")
+            logger.error(f"❌ Failed to create model: {e}")
+            raise
+    
+    def _create_agent(self, agent_id: str, system_prompt: str = None) -> Agent:
+        """Create agent instance with latest SDK"""
+        if not STRANDS_AVAILABLE:
+            raise RuntimeError("Strands Agent SDK not available")
+        
+        try:
+            # Get system prompt
+            if not system_prompt:
+                system_prompt = self._get_system_prompt(agent_id)
+            
+            # Create model
+            model = self._create_model()
+            
+            # Create agent with correct SDK parameters
+            agent = Agent(
+                model=model,
+                tools=self.default_tools,
+                system_prompt=system_prompt,
+                max_parallel_tools=4,  # 올바른 파라미터명
+                record_direct_tool_call=True,
+                load_tools_from_directory=False,  # 수동으로 도구 관리
+                trace_attributes={
+                    "agent_id": agent_id,
+                    "session_context": True
+                }
+            )
+            
+            logger.info(f"✅ Created agent '{agent_id}' with {len(self.default_tools)} tools")
+            return agent
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create agent '{agent_id}': {e}")
             raise
     
     def _get_system_prompt(self, agent_id: str) -> str:
-        """에이전트별 시스템 프롬프트 반환"""
+        """Get system prompt for specific agent"""
         prompts = {
             "assistant-001": """
-            당신은 도움이 되는 AI 어시스턴트입니다. 사용자의 질문에 정확하고 유용한 답변을 제공하세요.
-            
-            능력:
-            - 일반적인 질문 답변
-            - 웹 검색을 통한 최신 정보 제공
-            - 수학적 계산 수행
-            - 현재 시간 정보 제공
-            - 세션 정보 관리
-            
-            항상 친절하고 전문적인 톤으로 응답하세요.
-            """,
+당신은 AWS Strands Agent SDK를 사용하는 도움이 되는 AI 어시스턴트입니다.
+
+주요 역할:
+- 사용자의 질문에 정확하고 유용한 답변 제공
+- 사용 가능한 도구들을 적극적으로 활용하여 최신 정보 제공
+- 웹 검색, 계산, 시간 조회 등의 기능 활용
+- 한국어로 친근하고 전문적인 톤으로 대화
+
+사용 가능한 도구:
+- 웹 검색: 최신 정보 검색
+- 계산기: 수학적 계산 수행
+- 시간 조회: 현재 시간 확인
+- 세션 정보: 대화 세션 상태 확인
+- 시스템 상태: 시스템 정보 조회
+
+항상 도구를 적절히 활용하여 정확하고 도움이 되는 답변을 제공하세요.
+            """.strip(),
             
             "support-001": """
-            당신은 고객 지원 전문가입니다. 고객의 문제를 해결하고 최상의 서비스를 제공하세요.
-            
-            역할:
-            - 고객 문의사항 해결
-            - 단계별 문제 해결 가이드 제공
-            - 제품/서비스 정보 안내
-            - 기술적 문제 해결 지원
-            
-            항상 고객 중심적이고 해결 지향적으로 접근하세요.
-            """,
+당신은 AWS Strands Agent SDK를 사용하는 고객 지원 전문 AI 어시스턴트입니다.
+
+주요 역할:
+- 고객의 문제를 신속하고 정확하게 해결
+- 단계별 문제 해결 가이드 제공
+- 필요시 웹 검색을 통한 최신 정보 조회
+- 정중하고 이해하기 쉬운 방식으로 소통
+
+문제 해결 접근법:
+1. 문제 상황 정확히 파악
+2. 관련 정보 검색 및 수집
+3. 단계별 해결 방안 제시
+4. 추가 도움이 필요한지 확인
+
+항상 고객의 입장에서 생각하고 최선의 해결책을 제공하세요.
+            """.strip(),
             
             "analyst-001": """
-            당신은 데이터 분석 전문가입니다. 데이터를 분석하고 인사이트를 제공하세요.
-            
-            전문 분야:
-            - 데이터 분석 및 해석
-            - 통계적 계산 및 분석
-            - 트렌드 분석
-            - 비즈니스 인텔리전스
-            - 수치 데이터 처리
-            
-            분석적이고 논리적인 접근 방식을 사용하세요.
-            """
+당신은 AWS Strands Agent SDK를 사용하는 데이터 분석 전문 AI 어시스턴트입니다.
+
+주요 역할:
+- 데이터 분석 및 인사이트 제공
+- 계산기 도구를 활용한 정확한 수치 계산
+- 웹 검색을 통한 최신 데이터 및 트렌드 조회
+- 분석 결과를 명확하고 구조적으로 제시
+
+분석 접근법:
+1. 분석 목표 및 범위 명확화
+2. 관련 데이터 수집 및 검증
+3. 적절한 분석 방법 적용
+4. 결과 해석 및 인사이트 도출
+5. 시각적이고 이해하기 쉬운 형태로 제시
+
+항상 데이터에 기반한 객관적이고 정확한 분석을 제공하세요.
+            """.strip()
         }
         
         return prompts.get(agent_id, prompts["assistant-001"])
     
-    def _create_tools(self, agent_id: str) -> List[FunctionTool]:
-        """에이전트별 도구 생성 (1.0.1 방식)"""
-        tools = []
-        
-        # 기본 도구들
-        if TOOLS_AVAILABLE:
-            # 웹 검색 도구
-            if web_search:
-                tools.append(FunctionTool(
-                    name="web_search",
-                    description="Search the web for current information",
-                    function=web_search
-                ))
-            
-            # 계산기 도구
-            if calculator:
-                tools.append(FunctionTool(
-                    name="calculator",
-                    description="Perform mathematical calculations",
-                    function=calculator
-                ))
-            
-            # 시간 도구
-            if current_time:
-                tools.append(FunctionTool(
-                    name="current_time",
-                    description="Get current time and date",
-                    function=current_time
-                ))
-        
-        # 커스텀 도구들
-        tools.extend([
-            FunctionTool(
-                name="get_session_info",
-                description="Get information about the current session",
-                function=self._get_session_info
-            ),
-            FunctionTool(
-                name="format_response",
-                description="Format response for better readability",
-                function=self._format_response
-            )
-        ])
-        
-        # 에이전트별 특화 도구
-        if agent_id == "analyst-001":
-            tools.append(FunctionTool(
-                name="analyze_data",
-                description="Analyze numerical data and provide insights",
-                function=self._analyze_data
-            ))
-        
-        return tools
-    
-    def _get_session_info(self, session_id: str = None) -> str:
-        """세션 정보 반환"""
-        return f"Session info for {session_id or 'current session'}: Active session with Strands Agent 1.0.1"
-    
-    def _format_response(self, text: str, format_type: str = "markdown") -> str:
-        """응답 포맷팅"""
-        if format_type == "markdown":
-            return f"**Formatted Response:**\n\n{text}"
-        return text
-    
-    def _analyze_data(self, data: str) -> str:
-        """데이터 분석 (간단한 예시)"""
-        try:
-            # 간단한 숫자 분석
-            numbers = [float(x) for x in data.split() if x.replace('.', '').replace('-', '').isdigit()]
-            if numbers:
-                avg = sum(numbers) / len(numbers)
-                return f"Data analysis: {len(numbers)} numbers found. Average: {avg:.2f}, Min: {min(numbers)}, Max: {max(numbers)}"
-            return "No numerical data found for analysis"
-        except Exception as e:
-            return f"Analysis error: {str(e)}"
-    
-    def get_or_create_agent(self, agent_id: str) -> Agent:
-        """에이전트 인스턴스 가져오기 또는 생성 (1.0.1 방식)"""
-        if not STRANDS_AVAILABLE:
-            return Agent()
-        
-        if agent_id not in self.agents:
-            try:
-                # Strands Agent 1.0.1 방식으로 에이전트 생성
-                system_prompt = self._get_system_prompt(agent_id)
-                tools = self._create_tools(agent_id)
-                
-                self.agents[agent_id] = Agent(
-                    model=self.model,
-                    system_prompt=system_prompt,
-                    tools=tools,
-                    # 1.0.1 새로운 설정들
-                    max_iterations=int(os.getenv("STRANDS_MAX_ITERATIONS", "10")),
-                    enable_tracing=os.getenv("STRANDS_ENABLE_TRACING", "true").lower() == "true",
-                    memory_enabled=os.getenv("STRANDS_MEMORY_ENABLED", "true").lower() == "true"
-                )
-                
-                logger.info(f"Created new agent instance: {agent_id} with Strands 1.0.1")
-                
-            except Exception as e:
-                logger.error(f"Failed to create agent {agent_id}: {e}")
-                raise
-        
-        return self.agents[agent_id]
-    
     async def send_message(self, 
                           agent_id: str, 
                           message: str, 
-                          session_id: str = None,
-                          context: Optional[Dict[str, Any]] = None) -> str:
+                          session_context: Optional[Dict[str, Any]] = None,
+                          stream: bool = False) -> Dict[str, Any]:
         """
-        에이전트에게 메시지 전송 (1.0.1 방식)
+        Send message to agent with latest SDK features
         
         Args:
-            agent_id: 에이전트 ID
-            message: 사용자 메시지
-            session_id: 세션 ID
-            context: 추가 컨텍스트
+            agent_id: Agent identifier
+            message: User message
+            session_context: Session context information
+            stream: Enable streaming response (future feature)
             
         Returns:
-            에이전트 응답
+            Agent response with metadata
         """
-        try:
-            agent = self.get_or_create_agent(agent_id)
-            
-            # 컨텍스트가 있으면 메시지에 포함
-            if context:
-                context_str = f"\n\nContext: {json.dumps(context, ensure_ascii=False)}"
-                message = message + context_str
-            
-            # 세션 정보 추가
-            if session_id:
-                message = f"[Session: {session_id}] {message}"
-            
-            # Strands Agent 1.0.1 방식으로 메시지 처리
-            if STRANDS_AVAILABLE:
-                response = agent(message)
-                
-                # 응답이 문자열이 아닌 경우 처리
-                if hasattr(response, 'content'):
-                    return response.content
-                elif hasattr(response, 'text'):
-                    return response.text
-                else:
-                    return str(response)
-            else:
-                return f"Mock response to: {message}"
-                
-        except Exception as e:
-            logger.error(f"Error sending message to agent {agent_id}: {e}")
-            return f"죄송합니다. 처리 중 오류가 발생했습니다: {str(e)}"
-    
-    async def stream_message(self, 
-                           agent_id: str, 
-                           message: str, 
-                           session_id: str = None,
-                           context: Optional[Dict[str, Any]] = None):
-        """
-        스트리밍 메시지 처리 (1.0.1 개선된 방식)
+        if not STRANDS_AVAILABLE:
+            return await self._mock_send_message(agent_id, message, session_context)
         
-        Args:
-            agent_id: 에이전트 ID
-            message: 사용자 메시지
-            session_id: 세션 ID
-            context: 추가 컨텍스트
-            
-        Yields:
-            스트리밍 응답 청크
-        """
         try:
-            agent = self.get_or_create_agent(agent_id)
+            # Get or create agent
+            if agent_id not in self.agents:
+                self.agents[agent_id] = self._create_agent(agent_id)
             
-            # 컨텍스트 처리
-            if context:
-                context_str = f"\n\nContext: {json.dumps(context, ensure_ascii=False)}"
-                message = message + context_str
+            agent = self.agents[agent_id]
             
-            if session_id:
-                message = f"[Session: {session_id}] {message}"
-            
-            if STRANDS_AVAILABLE and hasattr(agent, 'stream'):
-                # 1.0.1의 개선된 스트리밍 지원
-                async for chunk in agent.stream(message):
-                    yield chunk
+            # Prepare message with context
+            if session_context:
+                context_info = f"\n\n[세션 컨텍스트]\n"
+                context_info += f"- 세션 ID: {session_context.get('session_id', 'unknown')}\n"
+                context_info += f"- 사용자 ID: {session_context.get('user_id', 'unknown')}\n"
+                if session_context.get('conversation_history'):
+                    context_info += f"- 이전 대화: {len(session_context['conversation_history'])}개\n"
+                
+                enhanced_message = message + context_info
             else:
-                # Fallback: 일반 응답을 청크로 분할
-                response = await self.send_message(agent_id, message, session_id, context)
-                words = response.split()
-                for i, word in enumerate(words):
-                    yield word + (" " if i < len(words) - 1 else "")
-                    await asyncio.sleep(0.05)  # 스트리밍 시뮬레이션
-                    
+                enhanced_message = message
+            
+            # Execute agent (async)
+            start_time = datetime.utcnow()
+            response = await asyncio.to_thread(agent, enhanced_message)
+            end_time = datetime.utcnow()
+            
+            processing_time = (end_time - start_time).total_seconds()
+            
+            return {
+                "success": True,
+                "response": str(response),
+                "agent_id": agent_id,
+                "timestamp": end_time.isoformat(),
+                "processing_time": processing_time,
+                "metadata": {
+                    "model_provider": self.model_provider,
+                    "model_id": self.model_id,
+                    "tools_count": len(self.default_tools),
+                    "strands_version": "latest",
+                    "session_id": session_context.get('session_id') if session_context else None
+                }
+            }
+            
         except Exception as e:
-            logger.error(f"Error streaming message to agent {agent_id}: {e}")
-            yield f"스트리밍 중 오류가 발생했습니다: {str(e)}"
+            logger.error(f"❌ Error in agent {agent_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "response": f"죄송합니다. 에이전트 처리 중 오류가 발생했습니다: {str(e)}",
+                "agent_id": agent_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
-    def get_agent_capabilities(self, agent_id: str) -> Dict[str, Any]:
-        """에이전트 능력 정보 반환"""
-        capabilities = {
+    async def _mock_send_message(self, 
+                                agent_id: str, 
+                                message: str, 
+                                session_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Mock message sending when Strands SDK is not available"""
+        await asyncio.sleep(0.8)  # Simulate processing time
+        
+        mock_responses = {
+            "assistant-001": f"""
+안녕하세요! Strands Agent 일반 어시스턴트입니다.
+
+📝 받은 메시지: "{message}"
+
+🔧 현재 상태: 데모 모드 (Strands SDK 미설치)
+⚡ 실제 환경에서는 다음 기능들이 활용됩니다:
+- 웹 검색을 통한 최신 정보 조회
+- 계산기를 통한 정확한 수치 계산
+- 실시간 시간 정보 제공
+- 세션 상태 관리
+
+실제 Strands Agent를 사용하려면 'pip install strands-agents strands-agents-tools'로 설치해주세요.
+            """.strip(),
+            
+            "support-001": f"""
+🎧 고객 지원팀입니다.
+
+📋 문의 내용: "{message}"
+
+✅ 확인 사항:
+- 현재 데모 모드로 실행 중
+- 실제 환경에서는 웹 검색을 통한 해결책 조회 가능
+- 단계별 문제 해결 가이드 제공
+- 실시간 시스템 상태 확인
+
+더 나은 지원을 위해 Strands Agent SDK 설치를 권장합니다.
+            """.strip(),
+            
+            "analyst-001": f"""
+📊 데이터 분석가입니다.
+
+🔍 분석 요청: "{message}"
+
+📈 분석 개요:
+- 현재 데모 모드로 제한적 기능 제공
+- 실제 환경에서는 계산기 도구로 정확한 수치 분석
+- 웹 검색을 통한 최신 데이터 수집
+- 구조화된 분석 결과 제시
+
+정확한 데이터 분석을 위해 Strands Agent SDK 설치가 필요합니다.
+            """.strip()
+        }
+        
+        response_text = mock_responses.get(agent_id, f"에이전트 {agent_id}에서 '{message}'에 대한 데모 응답입니다.")
+        
+        return {
+            "success": True,
+            "response": response_text,
+            "agent_id": agent_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "processing_time": 0.8,
+            "metadata": {
+                "mode": "mock",
+                "strands_available": False,
+                "message": "Install 'strands-agents strands-agents-tools' for full functionality"
+            }
+        }
+    
+    async def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
+        """Get detailed agent information"""
+        agent_configs = {
             "assistant-001": {
+                "id": "assistant-001",
                 "name": "General Assistant",
-                "description": "범용 AI 어시스턴트",
-                "tools": ["web_search", "calculator", "current_time", "session_info"],
-                "specialties": ["일반 질문 답변", "정보 검색", "계산"]
+                "description": "Strands Agent SDK를 사용하는 범용 AI 어시스턴트",
+                "capabilities": [
+                    "general_conversation",
+                    "web_search",
+                    "calculation",
+                    "time_query",
+                    "session_management"
+                ],
+                "tools": [
+                    {"name": "web_search", "available": TOOLS_AVAILABLE},
+                    {"name": "calculator", "available": TOOLS_AVAILABLE},
+                    {"name": "get_current_time", "available": True},
+                    {"name": "get_session_info", "available": True},
+                    {"name": "get_system_status", "available": True}
+                ],
+                "model_provider": self.model_provider,
+                "model_id": self.model_id,
+                "status": "active" if STRANDS_AVAILABLE else "mock"
             },
             "support-001": {
-                "name": "Customer Support",
-                "description": "고객 지원 전문가",
-                "tools": ["web_search", "current_time", "session_info"],
-                "specialties": ["문제 해결", "고객 지원", "기술 지원"]
+                "id": "support-001",
+                "name": "Customer Support Agent",
+                "description": "Strands Agent SDK를 사용하는 고객 지원 전문 어시스턴트",
+                "capabilities": [
+                    "customer_support",
+                    "troubleshooting",
+                    "web_search",
+                    "step_by_step_guidance"
+                ],
+                "tools": [
+                    {"name": "web_search", "available": TOOLS_AVAILABLE},
+                    {"name": "get_current_time", "available": True},
+                    {"name": "get_session_info", "available": True},
+                    {"name": "get_system_status", "available": True}
+                ],
+                "model_provider": self.model_provider,
+                "model_id": self.model_id,
+                "status": "active" if STRANDS_AVAILABLE else "mock"
             },
             "analyst-001": {
-                "name": "Data Analyst",
-                "description": "데이터 분석 전문가",
-                "tools": ["calculator", "analyze_data", "current_time", "session_info"],
-                "specialties": ["데이터 분석", "통계 계산", "트렌드 분석"]
+                "id": "analyst-001",
+                "name": "Data Analyst Agent",
+                "description": "Strands Agent SDK를 사용하는 데이터 분석 전문 어시스턴트",
+                "capabilities": [
+                    "data_analysis",
+                    "calculation",
+                    "web_search",
+                    "reporting",
+                    "trend_analysis"
+                ],
+                "tools": [
+                    {"name": "web_search", "available": TOOLS_AVAILABLE},
+                    {"name": "calculator", "available": TOOLS_AVAILABLE},
+                    {"name": "get_current_time", "available": True},
+                    {"name": "get_session_info", "available": True},
+                    {"name": "get_system_status", "available": True}
+                ],
+                "model_provider": self.model_provider,
+                "model_id": self.model_id,
+                "status": "active" if STRANDS_AVAILABLE else "mock"
             }
         }
         
-        return capabilities.get(agent_id, capabilities["assistant-001"])
+        if agent_id in agent_configs:
+            return {
+                "success": True,
+                "agent_info": agent_configs[agent_id]
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Agent '{agent_id}' not found"
+            }
     
-    def health_check(self) -> Dict[str, Any]:
-        """시스템 상태 확인"""
-        status = {
-            "strands_sdk_version": "1.0.1",
-            "strands_available": STRANDS_AVAILABLE,
-            "tools_available": TOOLS_AVAILABLE,
-            "model_provider": self.model_provider,
-            "model_id": self.model_id,
-            "region": self.region,
-            "active_agents": list(self.agents.keys()),
-            "timestamp": datetime.utcnow().isoformat()
+    async def list_agents(self) -> Dict[str, Any]:
+        """List all available agents with their status"""
+        agents = []
+        
+        for agent_id in ["assistant-001", "support-001", "analyst-001"]:
+            result = await self.get_agent_info(agent_id)
+            if result.get("success"):
+                agents.append(result["agent_info"])
+        
+        return {
+            "success": True,
+            "agents": agents,
+            "total": len(agents),
+            "system_status": {
+                "strands_available": STRANDS_AVAILABLE,
+                "tools_available": TOOLS_AVAILABLE,
+                "anthropic_available": ANTHROPIC_AVAILABLE,
+                "openai_available": OPENAI_AVAILABLE
+            }
+        }
+    
+    async def get_capabilities(self) -> Dict[str, Any]:
+        """Get comprehensive system capabilities"""
+        return {
+            "success": True,
+            "capabilities": {
+                "sdk_info": {
+                    "name": "AWS Strands Agent SDK",
+                    "version": "latest",
+                    "available": STRANDS_AVAILABLE
+                },
+                "model_providers": {
+                    "bedrock": {
+                        "available": True,
+                        "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+                    },
+                    "anthropic": {
+                        "available": ANTHROPIC_AVAILABLE,
+                        "default_model": "claude-3-5-sonnet-20241022"
+                    },
+                    "openai": {
+                        "available": OPENAI_AVAILABLE,
+                        "default_model": "gpt-4-turbo-preview"
+                    }
+                },
+                "tools": {
+                    "built_in": [
+                        {"name": "WebSearchTool", "available": TOOLS_AVAILABLE},
+                        {"name": "CalculatorTool", "available": TOOLS_AVAILABLE}
+                    ],
+                    "custom": [
+                        {"name": "get_current_time", "available": True},
+                        {"name": "get_session_info", "available": True},
+                        {"name": "get_system_status", "available": True}
+                    ]
+                },
+                "features": [
+                    "Model-driven agent architecture",
+                    "Multi-turn conversation support",
+                    "Context-aware responses",
+                    "Tool integration and chaining",
+                    "Async processing",
+                    "Error handling and recovery",
+                    "Session management",
+                    "Memory and context management"
+                ]
+            },
+            "installation_guide": {
+                "required_packages": [
+                    "strands-agents>=0.1.0",
+                    "strands-agents-tools>=0.1.0"
+                ],
+                "install_command": "pip install strands-agents strands-agents-tools",
+                "environment_variables": [
+                    "AWS_ACCESS_KEY_ID (for Bedrock)",
+                    "AWS_SECRET_ACCESS_KEY (for Bedrock)",
+                    "AWS_REGION (for Bedrock)",
+                    "ANTHROPIC_API_KEY (for Anthropic)",
+                    "OPENAI_API_KEY (for OpenAI)"
+                ]
+            }
+        }
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """Comprehensive health check"""
+        health_status = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "components": {
+                "strands_sdk": {
+                    "status": "available" if STRANDS_AVAILABLE else "unavailable",
+                    "details": "Core Strands Agent SDK"
+                },
+                "strands_tools": {
+                    "status": "available" if TOOLS_AVAILABLE else "unavailable",
+                    "details": "Built-in tools (WebSearch, Calculator)"
+                },
+                "model_providers": {
+                    "bedrock": {"status": "available", "region": self.region},
+                    "anthropic": {"status": "available" if ANTHROPIC_AVAILABLE else "unavailable"},
+                    "openai": {"status": "available" if OPENAI_AVAILABLE else "unavailable"}
+                }
+            },
+            "agents": {
+                "total_configured": 3,
+                "active_instances": len(self.agents),
+                "cached_agents": list(self.agents.keys())
+            }
         }
         
-        if STRANDS_AVAILABLE:
-            try:
-                # 간단한 테스트 에이전트로 상태 확인
-                test_agent = self.get_or_create_agent("assistant-001")
-                status["agent_test"] = "healthy"
-            except Exception as e:
-                status["agent_test"] = f"error: {str(e)}"
+        # Determine overall status
+        if not STRANDS_AVAILABLE:
+            health_status["overall_status"] = "degraded"
+            health_status["message"] = "Running in mock mode - Strands SDK not available"
+        elif not TOOLS_AVAILABLE:
+            health_status["overall_status"] = "partial"
+            health_status["message"] = "Core SDK available but tools limited"
         
-        return status
+        return {
+            "success": True,
+            "health": health_status
+        }
